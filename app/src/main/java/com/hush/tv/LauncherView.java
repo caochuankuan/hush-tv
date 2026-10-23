@@ -82,6 +82,7 @@ final class LauncherView extends View {
     private static final String LAYOUT_PURE = "pure_mode";
     private static final String LAYOUT_TAGLINE = "show_tagline";
     private static final String LAYOUT_CLOCK = "clock_position";
+    private static final String LAYOUT_CENTER = "center_clock";
     private static final int MENU_OPEN = 0;
     private static final int MENU_PIN = 1;
     private static final int MENU_INFO = 2;
@@ -171,6 +172,7 @@ final class LauncherView extends View {
     private boolean pureMode;
     private boolean showTagline;
     private String clockPosition = "left";
+    private boolean centerClock;
     private boolean pushOpen;
     private String pushUrl = "";
     private String pushStatus = "";
@@ -221,6 +223,7 @@ final class LauncherView extends View {
         pureMode = layoutPrefs.getBoolean(LAYOUT_PURE, false);
         showTagline = layoutPrefs.getBoolean(LAYOUT_TAGLINE, true);
         clockPosition = layoutPrefs.getString(LAYOUT_CLOCK, "left");
+        centerClock = layoutPrefs.getBoolean(LAYOUT_CENTER, false);
         collator = Collator.getInstance(Locale.CHINA);
         collator.setStrength(Collator.PRIMARY);
         loadPins();
@@ -591,7 +594,8 @@ final class LauncherView extends View {
         if (pureMode) {
             return "纯净";
         }
-        return "标准 · " + clockPositionLabel(clockPosition);
+        String summary = "标准 · " + clockPositionLabel(clockPosition);
+        return centerClock ? summary + " · 居中" : summary;
     }
 
     private String clockPositionLabel(String position) {
@@ -663,6 +667,14 @@ final class LauncherView extends View {
         }
         root.addView(positions);
 
+        CheckBox center = new CheckBox(context);
+        center.setText("时间居中");
+        center.setTextSize(14);
+        center.setTextColor(COLOR_CREAM);
+        center.setChecked(centerClock);
+        center.setPadding(0, (int) dp(8), 0, 0);
+        root.addView(center);
+
         Runnable updateEnabled = () -> {
             boolean enabled = !pure.isChecked();
             tagline.setEnabled(enabled);
@@ -675,6 +687,8 @@ final class LauncherView extends View {
                 child.setEnabled(enabled);
                 child.setAlpha(enabled ? 1f : 0.35f);
             }
+            center.setEnabled(enabled);
+            center.setAlpha(enabled ? 1f : 0.35f);
         };
         pure.setOnCheckedChangeListener((buttonView, isChecked) -> updateEnabled.run());
         updateEnabled.run();
@@ -693,11 +707,13 @@ final class LauncherView extends View {
                     }
                     pureMode = pure.isChecked();
                     showTagline = tagline.isChecked();
+                    centerClock = center.isChecked();
                     clockPosition = position;
                     layoutPrefs.edit()
                             .putBoolean(LAYOUT_PURE, pureMode)
                             .putBoolean(LAYOUT_TAGLINE, showTagline)
                             .putString(LAYOUT_CLOCK, clockPosition)
+                            .putBoolean(LAYOUT_CENTER, centerClock)
                             .apply();
                     closeSettings(false);
                     applyLayoutChange();
@@ -1786,19 +1802,42 @@ final class LauncherView extends View {
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
+    private float textWidth(String text, Typeface face, float size, float spacing) {
+        measurePaint.setTypeface(face);
+        measurePaint.setTextSize(size);
+        measurePaint.setLetterSpacing(spacing);
+        return measurePaint.measureText(text);
+    }
+
     private void drawHero(Canvas canvas) {
         boolean right = rightClock();
-        float x = right ? getWidth() - padH : padH;
+        boolean centered = centerClock;
+        float x;
+        Paint.Align align;
+        if (centered) {
+            x = right ? getWidth() - padH - leftWidth / 2f : padH + leftWidth / 2f;
+            align = Paint.Align.CENTER;
+        } else {
+            x = right ? getWidth() - padH : padH;
+            align = right ? Paint.Align.RIGHT : Paint.Align.LEFT;
+        }
         float direction = right ? -1f : 1f;
-        Paint.Align align = right ? Paint.Align.RIGHT : Paint.Align.LEFT;
+        float shift = centered ? (showTagline ? dp(24) : dp(39)) : 0f;
 
         textPaint.setTypeface(typeRegular);
         textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(0.24f);
         textPaint.setColor(COLOR_ACCENT);
-        canvas.drawCircle(x + direction * dp(2), gridTop + dp(51), dp(2), textPaint);
-        drawText(canvas, "现在", x + direction * dp(11), gridTop + dp(55), sp(9),
-                0xFF7A8089);
+        if (centered) {
+            float labelWidth = textWidth("现在", typeRegular, sp(9), 0.24f);
+            canvas.drawCircle(x - labelWidth / 2f - dp(7), gridTop + dp(51) + shift, dp(2), textPaint);
+            drawText(canvas, "现在", x + dp(4), gridTop + dp(55) + shift, sp(9),
+                    0xFF7A8089);
+        } else {
+            canvas.drawCircle(x + direction * dp(2), gridTop + dp(51), dp(2), textPaint);
+            drawText(canvas, "现在", x + direction * dp(11), gridTop + dp(55), sp(9),
+                    0xFF7A8089);
+        }
 
         textPaint.setTypeface(typeLight);
         textPaint.setTextAlign(align);
@@ -1810,22 +1849,26 @@ final class LauncherView extends View {
         if (clockWidth > leftWidth + dp(6)) {
             clockSize *= (leftWidth + dp(6)) / clockWidth;
         }
-        drawText(canvas, timeText, x, dp(248), clockSize, COLOR_CREAM);
+        drawText(canvas, timeText, x, dp(248) + shift, clockSize, COLOR_CREAM);
         textPaint.setFontFeatureSettings(null);
 
         textPaint.setTypeface(typeRegular);
         textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(0.055f);
-        drawText(canvas, dateText, x + direction * dp(2), dp(285), sp(14), COLOR_DATE);
+        drawText(canvas, dateText, centered ? x : x + direction * dp(2), dp(285) + shift,
+                sp(14), COLOR_DATE);
 
         textPaint.setTypeface(typeMedium);
         textPaint.setLetterSpacing(0.04f);
-        drawText(canvas, greeting, x + direction * dp(2), dp(322), sp(17), 0xFFE7E2D8);
+        drawText(canvas, greeting, centered ? x : x + direction * dp(2), dp(322) + shift,
+                sp(17), 0xFFE7E2D8);
 
         textPaint.setStyle(Paint.Style.STROKE);
         textPaint.setStrokeWidth(dp(1));
         textPaint.setShader(dividerShader);
-        if (right) {
+        if (centered) {
+            canvas.drawLine(x - dp(14), dp(360) + shift, x + dp(14), dp(360) + shift, textPaint);
+        } else if (right) {
             canvas.drawLine(x - dp(2), dp(360), x - dp(30), dp(360), textPaint);
         } else {
             canvas.drawLine(x + dp(2), dp(360), x + dp(30), dp(360), textPaint);
@@ -1837,19 +1880,18 @@ final class LauncherView extends View {
             textPaint.setTypeface(typeRegular);
             textPaint.setTextAlign(align);
             textPaint.setLetterSpacing(0.12f);
-            drawText(canvas, "少一点，刚刚好。", x + direction * dp(2), dp(390), sp(10),
-                    0xFF686E77);
+            drawText(canvas, "少一点，刚刚好。", centered ? x : x + direction * dp(2),
+                    dp(390) + shift, sp(10), 0xFF686E77);
         }
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
     private void drawHeroTop(Canvas canvas) {
-        float x = padH;
         textPaint.setTypeface(typeLight);
-        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setTextAlign(centerClock ? Paint.Align.CENTER : Paint.Align.LEFT);
         textPaint.setLetterSpacing(-0.035f);
         textPaint.setFontFeatureSettings("tnum");
-        float clockSize = sp(66);
+        float clockSize = sp(centerClock ? 58 : 66);
         textPaint.setTextSize(clockSize);
         float clockWidth = textPaint.measureText(timeText);
         float maxClockWidth = getWidth() * 0.55f;
@@ -1857,10 +1899,29 @@ final class LauncherView extends View {
             clockSize *= maxClockWidth / clockWidth;
             clockWidth = maxClockWidth;
         }
-        drawText(canvas, timeText, x, getHeight() * 0.28f, clockSize, COLOR_CREAM);
+        if (centerClock) {
+            drawText(canvas, timeText, getWidth() / 2f, getHeight() * 0.26f, clockSize,
+                    COLOR_CREAM);
+            textPaint.setFontFeatureSettings(null);
+            textPaint.setTypeface(typeRegular);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            textPaint.setLetterSpacing(0.04f);
+            drawText(canvas, dateText + "  ·  " + greeting, getWidth() / 2f,
+                    getHeight() * 0.315f, sp(13), COLOR_DATE);
+            if (showTagline) {
+                textPaint.setLetterSpacing(0.12f);
+                drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
+                        getHeight() * 0.35f, sp(9), 0xFF686E77);
+            }
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            return;
+        }
+
+        float startX = padH;
+        drawText(canvas, timeText, startX, getHeight() * 0.28f, clockSize, COLOR_CREAM);
         textPaint.setFontFeatureSettings(null);
 
-        float infoX = x + clockWidth + dp(28);
+        float infoX = startX + clockWidth + dp(28);
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.055f);
         drawText(canvas, dateText, infoX, getHeight() * 0.218f, sp(13), COLOR_DATE);
@@ -1877,18 +1938,11 @@ final class LauncherView extends View {
     }
 
     private void drawHeroBottom(Canvas canvas) {
-        float x = padH;
-        textPaint.setTypeface(typeRegular);
-        textPaint.setTextAlign(Paint.Align.LEFT);
-        textPaint.setLetterSpacing(0.24f);
-        textPaint.setColor(COLOR_ACCENT);
-        canvas.drawCircle(x + dp(2), getHeight() * 0.70f, dp(2), textPaint);
-        drawText(canvas, "现在", x + dp(11), getHeight() * 0.704f, sp(9), 0xFF7A8089);
-
         textPaint.setTypeface(typeLight);
+        textPaint.setTextAlign(centerClock ? Paint.Align.CENTER : Paint.Align.LEFT);
         textPaint.setLetterSpacing(-0.035f);
         textPaint.setFontFeatureSettings("tnum");
-        float clockSize = sp(66);
+        float clockSize = sp(centerClock ? 58 : 66);
         textPaint.setTextSize(clockSize);
         float clockWidth = textPaint.measureText(timeText);
         float maxClockWidth = getWidth() * 0.48f;
@@ -1896,10 +1950,40 @@ final class LauncherView extends View {
             clockSize *= maxClockWidth / clockWidth;
             clockWidth = maxClockWidth;
         }
-        drawText(canvas, timeText, x, getHeight() * 0.885f, clockSize, COLOR_CREAM);
+        if (centerClock) {
+            drawText(canvas, timeText, getWidth() / 2f, getHeight() * 0.86f, clockSize,
+                    COLOR_CREAM);
+            textPaint.setFontFeatureSettings(null);
+            textPaint.setTypeface(typeRegular);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            textPaint.setLetterSpacing(0.04f);
+            drawText(canvas, dateText + "  ·  " + greeting, getWidth() / 2f,
+                    getHeight() * 0.77f, sp(13), COLOR_DATE);
+            if (showTagline) {
+                textPaint.setLetterSpacing(0.12f);
+                drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
+                        getHeight() * 0.96f, sp(9), 0xFF686E77);
+            }
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            return;
+        }
+
+        float startX = padH;
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.24f);
+        textPaint.setColor(COLOR_ACCENT);
+        canvas.drawCircle(padH + dp(2), getHeight() * 0.70f, dp(2), textPaint);
+        drawText(canvas, "现在", padH + dp(11), getHeight() * 0.704f, sp(9),
+                0xFF7A8089);
+        textPaint.setTypeface(typeLight);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(-0.035f);
+        textPaint.setFontFeatureSettings("tnum");
+        drawText(canvas, timeText, startX, getHeight() * 0.885f, clockSize, COLOR_CREAM);
         textPaint.setFontFeatureSettings(null);
 
-        float infoX = x + clockWidth + dp(28);
+        float infoX = startX + clockWidth + dp(28);
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.055f);
         drawText(canvas, dateText, infoX, getHeight() * 0.825f, sp(13), COLOR_DATE);
