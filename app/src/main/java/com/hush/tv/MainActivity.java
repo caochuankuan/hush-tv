@@ -14,7 +14,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.View;
-import android.view.WindowManager;
 import android.widget.Toast;
 
 import java.util.List;
@@ -36,7 +35,6 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         getWindow().setBackgroundDrawable(new ColorDrawable(Color.BLACK));
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         hideSystemUi();
 
         launchedFromLauncher = getIntent().hasCategory(Intent.CATEGORY_LAUNCHER);

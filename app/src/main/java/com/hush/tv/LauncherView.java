@@ -77,7 +77,14 @@ final class LauncherView extends View {
     private static final int MENU_INFO = 2;
     private static final int MENU_UNINSTALL = 3;
     private static final int MENU_ITEM_COUNT = 4;
-    private static final int SETTINGS_ITEM_COUNT = 5;
+    private static final int SETTINGS_ITEM_COUNT = 6;
+    private static final long[] SCREEN_TIMEOUT_VALUES = {
+            5L * 60 * 1000, 10L * 60 * 1000, 15L * 60 * 1000,
+            30L * 60 * 1000, 60L * 60 * 1000, Integer.MAX_VALUE
+    };
+    private static final String[] SCREEN_TIMEOUT_LABELS = {
+            "5 分钟", "10 分钟", "15 分钟", "30 分钟", "1 小时", "永不"
+    };
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AppRepository repository;
@@ -149,6 +156,7 @@ final class LauncherView extends View {
     private float settingsProgress;
     private ValueAnimator settingsAnimator;
     private final RectF settingsPanel = new RectF();
+    private String screenTimeoutSummary = "—";
     private boolean pushOpen;
     private String pushUrl = "";
     private String pushStatus = "";
@@ -503,6 +511,7 @@ final class LauncherView extends View {
     private void openSettings() {
         closeMenu();
         headerFocused = false;
+        refreshScreenTimeoutSummary();
         settingsOpen = true;
         settingsIndex = 0;
         settingsProgress = 0f;
@@ -534,7 +543,7 @@ final class LauncherView extends View {
 
     private void computeSettingsPanel() {
         float width = dp(360);
-        float height = dp(360);
+        float height = dp(410);
         float left = (getWidth() - width) / 2f;
         float top = (getHeight() - height) / 2f;
         settingsPanel.set(left, top, left + width, top + height);
@@ -551,15 +560,111 @@ final class LauncherView extends View {
             case 3:
                 return "系统设置";
             case 4:
+                return "熄屏时间";
+            case 5:
             default:
                 return "远程推送";
         }
     }
 
+    private void refreshScreenTimeoutSummary() {
+        try {
+            int value = Settings.System.getInt(getContext().getContentResolver(),
+                    Settings.System.SCREEN_OFF_TIMEOUT, 15 * 60 * 1000);
+            screenTimeoutSummary = formatScreenTimeout(value);
+        } catch (Exception e) {
+            screenTimeoutSummary = "—";
+        }
+    }
+
+    private String formatScreenTimeout(int value) {
+        if (value >= 24 * 60 * 60 * 1000 || value == Integer.MAX_VALUE) {
+            return "永不";
+        }
+        if (value >= 60 * 60 * 1000 && value % (60 * 60 * 1000) == 0) {
+            return (value / (60 * 60 * 1000)) + " 小时";
+        }
+        return Math.max(1, value / 60000) + " 分钟";
+    }
+
+    private void showScreenTimeoutDialog() {
+        if (!canWriteSettings()) {
+            new AlertDialog.Builder(getContext(), android.R.style.Theme_Material_Dialog_Alert)
+                    .setTitle("需要修改系统设置权限")
+                    .setMessage("设置熄屏时间需要允许「留白」修改系统设置。")
+                    .setPositiveButton("去授权", (dialog, which) -> openWriteSettingsPermission())
+                    .setNegativeButton("取消", null)
+                    .show();
+            return;
+        }
+        refreshScreenTimeoutSummary();
+        int selected = -1;
+        try {
+            int current = Settings.System.getInt(getContext().getContentResolver(),
+                    Settings.System.SCREEN_OFF_TIMEOUT, -1);
+            for (int i = 0; i < SCREEN_TIMEOUT_VALUES.length; i++) {
+                if (SCREEN_TIMEOUT_VALUES[i] == Integer.MAX_VALUE
+                        && current >= 24 * 60 * 60 * 1000) {
+                    selected = i;
+                    break;
+                }
+                if (Math.abs(SCREEN_TIMEOUT_VALUES[i] - current) < 1000) {
+                    selected = i;
+                    break;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        new AlertDialog.Builder(getContext(), android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("熄屏时间")
+                .setSingleChoiceItems(SCREEN_TIMEOUT_LABELS, selected, (dialog, which) -> {
+                    applyScreenTimeout((int) SCREEN_TIMEOUT_VALUES[which]);
+                    dialog.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private boolean canWriteSettings() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || Settings.System.canWrite(getContext());
+    }
+
+    private void openWriteSettingsPermission() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS,
+                    Uri.parse("package:" + getContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(getContext(), "请在系统设置中允许留白修改系统设置",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void applyScreenTimeout(int value) {
+        try {
+            Settings.System.putInt(getContext().getContentResolver(),
+                    Settings.System.SCREEN_OFF_TIMEOUT, value);
+            screenTimeoutSummary = formatScreenTimeout(value);
+            Toast.makeText(getContext(), "熄屏时间已设为 " + screenTimeoutSummary,
+                    Toast.LENGTH_SHORT).show();
+            invalidate();
+        } catch (Exception e) {
+            Log.w(TAG, "Cannot write screen timeout", e);
+            Toast.makeText(getContext(), "设置失败，请允许留白修改系统设置",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
     private void executeSettingsAction() {
-        if (settingsIndex == 4) {
+        if (settingsIndex == 5) {
             closeSettings(false);
             openPush();
+            return;
+        }
+        if (settingsIndex == 4) {
+            showScreenTimeoutDialog();
             return;
         }
         String action;
@@ -675,6 +780,11 @@ final class LauncherView extends View {
             textPaint.setTextAlign(Paint.Align.RIGHT);
             textPaint.setTypeface(typeRegular);
             textPaint.setLetterSpacing(0f);
+            if (i == 4) {
+                drawText(canvas, screenTimeoutSummary, right - dp(40),
+                        rowTop + dp(25) + sp(4.5f), sp(8),
+                        selected ? 0xFF55575A : 0xFF7A8089);
+            }
             drawText(canvas, "›", right - dp(24), rowTop + dp(25) + sp(4.5f), sp(14),
                     selected ? 0xFF4A4B4D : 0xFF5E646D);
         }
@@ -683,7 +793,7 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.03f);
         drawText(canvas, "开发者选项被隐藏时，先到「关于设备」连点版本号。",
-                left + dp(22), top + dp(342), sp(7.5f), 0xFF6A7079);
+                left + dp(22), top + dp(392), sp(7.5f), 0xFF6A7079);
         canvas.restore();
     }
 
