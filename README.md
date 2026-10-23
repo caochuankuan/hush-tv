@@ -46,8 +46,7 @@
 ```bash
 adb install -r dist/HUSH-TV-1.3.1.apk
 
-# 如果之前装过 v1.2.0 的预编译 APK，1.3.x 使用了不同的本地调试签名，
-# 需要先卸载旧包再安装：
+# 如果之前装过 v1.2.0 的预编译 APK（旧签名），需要先卸载旧包：
 # adb uninstall com.hush.tv
 
 # 把留白设为 HOME
@@ -135,7 +134,9 @@ export ANDROID_SDK_ROOT="$HOME/Library/Android/sdk"
 app/build/outputs/apk/release/app-release.apk
 ```
 
-仓库不包含 `local.properties` 和签名文件。Gradle 会使用 `ANDROID_SDK_ROOT`；也可以在本地创建 `local.properties` 指定 `sdk.dir`。Release 使用本机 Android 默认 debug 签名，仅用于侧载演示；上架应用商店前请换成正式签名。`dist/` 里的 APK 使用另一份本地调试签名，覆盖安装自行构建的版本前先卸载旧包。
+仓库包含固定的 `keystore/debug.keystore`，`assembleRelease` 会使用它签名，保证每次构建和 release 的签名一致。密码和 alias 都是标准 debug 值（`android` / `androiddebugkey`），这是一份公开的侧载调试 key，不用于正式商店发布。
+
+`local.properties` 仍然不提交。Gradle 会使用 `ANDROID_SDK_ROOT`；也可以在本地创建 `local.properties` 指定 `sdk.dir`。
 
 ## 用 Android CLI 创建 TV 虚拟机
 

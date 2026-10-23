@@ -3,9 +3,6 @@ build/
 app/build/
 demo/build/
 local.properties
-keystore/
-*.keystore
-*.jks
 *.iml
 .idea/
 .DS_Store
