@@ -21,6 +21,7 @@ import android.os.SystemClock;
 import android.provider.Settings;
 import android.text.TextPaint;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
@@ -55,6 +56,7 @@ final class LauncherView extends View {
     private static final int COLOR_INK = 0xFF0A0B0D;
     private static final int COLOR_ACCENT = 0xFFE7A56A;
 
+    private static final String TAG = "HushSettings";
     private static final String[] WEEKDAYS = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
     private static final String PIN_PREFS = "hush_pins";
     private static final String PIN_KEY = "pins";
@@ -504,7 +506,11 @@ final class LauncherView extends View {
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             getContext().startActivity(intent);
-        } catch (ActivityNotFoundException e) {
+        } catch (Exception e) {
+            // OEM TV builds may hide a page or throw SecurityException instead of
+            // returning ActivityNotFoundException. Never let a settings shortcut
+            // take down the launcher.
+            Log.w(TAG, "Unable to open system settings page: " + action, e);
             Toast.makeText(getContext(), "这个系统没有对应的设置页面", Toast.LENGTH_SHORT).show();
         }
     }
