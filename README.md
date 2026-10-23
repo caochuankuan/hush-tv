@@ -48,7 +48,7 @@
 ## 直接安装
 
 ```bash
-adb install -r dist/HUSH-TV-1.5.1.apk
+adb install -r dist/HUSH-TV-1.5.2.apk
 
 # 如果之前装过 v1.2.0 的预编译 APK（旧签名），需要先卸载旧包：
 # adb uninstall com.hush.tv
@@ -257,7 +257,7 @@ hush-tv/
 - 四个入口都做了异常捕获：页面不存在、被隐藏或抛出 `SecurityException` 时只提示 Toast，不会闪退。
 - 远程推送已完成端到端验证：局域网 HTTP 页面上传 APK → 系统安装确认 → 安装成功 → 桌面应用列表自动刷新。
 - 已验证上传 PNG / TXT：保存路径显示、文件列表刷新、方向键选择、打开入口和二次确认删除均正常。
-- APK 上传后由前台 `InstallProxyActivity` 转发系统安装确认，兼容限制后台启动 Activity 的电视；安装成功后桌面自动刷新。
+- APK 上传后优先用 `ACTION_VIEW` 直接交给系统安装器；没有处理程序时回退到前台 `InstallProxyActivity` + `PackageInstaller`，安装成功后桌面自动刷新。
 - 上传 / 安装过程中按 `BACK` 或离开页面会停止接收服务。
 - 按 `HOME` 进入留白；重启模拟器后仍自动进入留白。
 - 卸载演示应用后，4 个系统应用自动切换为 2 × 2 大卡片布局。

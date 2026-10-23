@@ -948,6 +948,30 @@ final class LauncherView extends View {
             return;
         }
 
+        // The system package installer is the most compatible path: opening the
+        // APK with ACTION_VIEW lets the TV's own installer show the confirmation.
+        // Fall back to an explicit PackageInstaller session only if no handler
+        // exists or the launch is rejected.
+        Uri uri = PushFileProvider.uriFor(apk);
+        Intent open = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, "application/vnd.android.package-archive")
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            getContext().startActivity(open);
+            refreshPending = true;
+            pushPercent = 100;
+            pushStatus = "已打开系统安装界面";
+            invalidate();
+            return;
+        } catch (Exception e) {
+            Log.w(TAG, "ACTION_VIEW installer failed; falling back to PackageInstaller", e);
+        }
+
+        installViaPackageInstaller(apk);
+    }
+
+    private void installViaPackageInstaller(File apk) {
         PackageInstaller.Session session = null;
         try {
             PackageInstaller installer = getContext().getPackageManager().getPackageInstaller();

@@ -10,8 +10,8 @@ android {
         applicationId 'com.hush.tv'
         minSdk 23
         targetSdk 36
-        versionCode 8
-        versionName '1.5.1'
+        versionCode 9
+        versionName '1.5.2'
     }
 
     // Public, reproducible sideload key. It is intentionally committed so
