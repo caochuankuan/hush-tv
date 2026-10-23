@@ -2,15 +2,15 @@
 
 > 少一点，刚刚好。
 
-一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **88 KB**。
+一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **90 KB**。
 
 ![HUSH TV 桌面](screenshots/home.png)
 
 ## 效果
 
-| 方向键移动焦点 | 应用操作菜单 |
+| 系统快捷入口 | 应用操作菜单 |
 | --- | --- |
-| ![焦点](screenshots/focus.png) | ![应用操作菜单](screenshots/menu.png) |
+| ![桌面设置](screenshots/settings.png) | ![应用操作菜单](screenshots/menu.png) |
 
 - 左侧是时间、日期和问候语；右侧是应用卡片。
 - 应用不超过 4 个时自动变成 **2 × 2 大卡片**；5 个及以上变成 **三列网格**；超过 9 个可以纵向滚动。
@@ -24,7 +24,8 @@
 - 完整方向键导航：`← ↑ ↓ →` 移动，`OK / Enter / A` 打开。
 - 选中应用后按 `MENU` 打开操作菜单：**打开 / 置顶 / 信息 / 卸载**。
 - 置顶应用优先展示，并在卡片左上角显示小圆点；置顶状态保存在本地，重启后仍然生效。
-- 长按 `MENU`（或按 `INFO`）打开桌面设置。
+- 第一行按 `↑` 进入右上角「设置」，内含开发者选项、关于设备、应用管理、系统设置四个系统快捷入口。
+- 长按 `MENU`（或按 `INFO`）打开默认桌面 / Home 设置。
 - 应用启动失败时自动回退到普通 Launcher intent，并给出提示。
 - 注册了 `HOME` 与 `LEANBACK_LAUNCHER`，可作为电视默认桌面；带 TV banner。
 - 启动器内按 `BACK` 不会退出桌面。
@@ -37,12 +38,17 @@
 - `OK / Enter / A`：打开应用
 - `MENU`：打开当前应用的操作菜单
 - 菜单内 `↑ ↓` 选择操作，`OK` 执行，`BACK` 关闭
-- 长按 `MENU` / `INFO`：桌面设置（默认桌面、Home 被占用时查看 ADB 命令）
+- 第一行按 `↑`：进入右上角「设置」，打开开发者选项 / 关于设备 / 应用管理 / 系统设置
+- 长按 `MENU` / `INFO`：默认桌面与 Home 设置（Home 被占用时查看 ADB 命令）
 
 ## 直接安装
 
 ```bash
-adb install -r dist/HUSH-TV-1.2.apk
+adb install -r dist/HUSH-TV-1.3.apk
+
+# 如果之前装过 v1.2.0 的预编译 APK，1.3.0 使用了不同的本地调试签名，
+# 需要先卸载旧包再安装：
+# adb uninstall com.hush.tv
 
 # 把留白设为 HOME
 adb shell cmd role add-role-holder android.app.role.HOME com.hush.tv
@@ -75,7 +81,7 @@ DISABLE_STOCK_LAUNCHER=1 ./scripts/install.sh   # 需要停用 Google TV Launche
    1.0 的 Activity 只注册了 `LEANBACK_LAUNCHER` 和 `HOME`，没有普通 `LAUNCHER`。所以在手机式桌面、部分电视盒的“全部应用”里看不到它。1.1 增加了 `CATEGORY_LAUNCHER`，重新安装后应用列表里会出现「留白」。
 
 2. **按 Home 没有弹出“选择桌面”**
-   Android TV 不会因为安装了一个 HOME 应用就自动弹选择框，需要手动设置。打开「留白」后会出现设置提示，点「去设置」，在系统界面里选择「留白」并确认。之后长按 `MENU`（或按 `INFO`）可以随时重新打开这个提示。短按 `MENU` 是应用操作菜单。
+   Android TV 不会因为安装了一个 HOME 应用就自动弹选择框，需要手动设置。打开「留白」后会出现设置提示，点「去设置」，在系统界面里选择「留白」并确认。之后长按 `MENU`（或按 `INFO`）可以随时重新打开默认桌面提示。短按 `MENU` 是应用操作菜单；右上角「设置」是系统快捷入口。
 
 3. **已经选了留白，Home 还是回到原桌面**
    很多电视/盒子的原桌面是厂商常驻应用，会继续抢占 Home。用 ADB 找到它并临时停用：
@@ -173,6 +179,17 @@ adb shell wm density       # Physical density: 320
 
 > 如果在受限沙箱里启动模拟器时遇到 `TemporaryItems` / `Operation not permitted`，把 `HOME` 指到一个可写目录，或给模拟器进程对应的临时目录写权限即可。本次是在工作区内用独立的 `HOME` 完成启动的。
 
+## 系统快捷入口
+
+右上角「设置」里的四个跳转，参考了 [ADBHelper](https://github.com/ChiKaWa3077/ADBHelper)（MIT）的四个入口：
+
+- **开发者选项**：`Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS`
+- **关于设备**：`Settings.ACTION_DEVICE_INFO_SETTINGS`
+- **应用管理**：`Settings.ACTION_APPLICATION_SETTINGS`
+- **系统设置**：`Settings.ACTION_SETTINGS`
+
+和 ADBHelper 一样，这里只负责跳转，不直接修改系统设置；USB / 网络 ADB 开关仍需要在开发者选项里手动打开。
+
 ## 项目结构
 
 ```text
@@ -197,6 +214,8 @@ hush-tv/
 - `OK` 成功启动演示应用，`BACK` 返回桌面。
 - `MENU` 菜单中的打开、置顶、信息、卸载入口均验证通过。
 - 置顶后应用移动到首位，`force-stop` / 重启后置顶状态仍保留。
+- 第一行按 `↑` 进入右上角「设置」，四个系统快捷入口都能正常拉起。
+- 开发者选项、关于设备、系统设置直接进入对应页面；应用管理在部分电视上会先弹出系统组件选择器。
 - 按 `HOME` 进入留白；重启模拟器后仍自动进入留白。
 - 卸载演示应用后，4 个系统应用自动切换为 2 × 2 大卡片布局。
 

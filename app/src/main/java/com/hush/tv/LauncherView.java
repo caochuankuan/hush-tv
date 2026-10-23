@@ -127,6 +127,13 @@ final class LauncherView extends View {
     private boolean refreshPending;
 
     private Runnable desktopSettingsAction;
+    private boolean headerFocused;
+    private final RectF settingsChip = new RectF();
+    private boolean settingsOpen;
+    private int settingsIndex;
+    private float settingsProgress;
+    private ValueAnimator settingsAnimator;
+    private final RectF settingsPanel = new RectF();
     private boolean menuOpen;
     private int menuIndex;
     private AppEntry menuTarget;
@@ -372,6 +379,7 @@ final class LauncherView extends View {
     }
 
     private void openMenu() {
+        headerFocused = false;
         if (focusedIndex < 0 || focusedIndex >= apps.size()) {
             if (desktopSettingsAction != null) {
                 desktopSettingsAction.run();
@@ -414,6 +422,182 @@ final class LauncherView extends View {
         float left = (getWidth() - width) / 2f;
         float top = (getHeight() - height) / 2f;
         menuPanel.set(left, top, left + width, top + height);
+    }
+
+    private void openSettings() {
+        closeMenu();
+        headerFocused = false;
+        settingsOpen = true;
+        settingsIndex = 0;
+        settingsProgress = 0f;
+        computeSettingsPanel();
+        if (settingsAnimator != null) {
+            settingsAnimator.cancel();
+        }
+        settingsAnimator = ValueAnimator.ofFloat(0f, 1f);
+        settingsAnimator.setDuration(150L);
+        settingsAnimator.setInterpolator(new DecelerateInterpolator(2f));
+        settingsAnimator.addUpdateListener(animation -> {
+            settingsProgress = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        settingsAnimator.start();
+        invalidate();
+    }
+
+    private void closeSettings(boolean focusHeader) {
+        settingsOpen = false;
+        settingsProgress = 0f;
+        headerFocused = focusHeader;
+        if (settingsAnimator != null) {
+            settingsAnimator.cancel();
+            settingsAnimator = null;
+        }
+        invalidate();
+    }
+
+    private void computeSettingsPanel() {
+        float width = dp(360);
+        float height = dp(310);
+        float left = (getWidth() - width) / 2f;
+        float top = (getHeight() - height) / 2f;
+        settingsPanel.set(left, top, left + width, top + height);
+    }
+
+    private String settingsLabel(int index) {
+        switch (index) {
+            case 0:
+                return "开发者选项";
+            case 1:
+                return "关于设备";
+            case 2:
+                return "应用管理";
+            case 3:
+            default:
+                return "系统设置";
+        }
+    }
+
+    private void executeSettingsAction() {
+        String action;
+        switch (settingsIndex) {
+            case 0:
+                action = Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS;
+                break;
+            case 1:
+                action = Settings.ACTION_DEVICE_INFO_SETTINGS;
+                break;
+            case 2:
+                action = Settings.ACTION_APPLICATION_SETTINGS;
+                break;
+            case 3:
+            default:
+                action = Settings.ACTION_SETTINGS;
+                break;
+        }
+        closeSettings(false);
+        launchSystemPage(action);
+    }
+
+    private void launchSystemPage(String action) {
+        Intent intent = new Intent(action);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(getContext(), "这个系统没有对应的设置页面", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private int settingsRowAt(float x, float y) {
+        if (!settingsOpen || !settingsPanel.contains(x, y)) {
+            return -1;
+        }
+        float rowsTop = settingsPanel.top + dp(70);
+        if (y < rowsTop) {
+            return -1;
+        }
+        int row = (int) ((y - rowsTop) / dp(50));
+        return row >= 0 && row < 4 ? row : -1;
+    }
+
+    private void drawSettings(Canvas canvas) {
+        if (!settingsOpen || settingsProgress <= 0f) {
+            return;
+        }
+        computeSettingsPanel();
+        float progress = Math.max(0f, Math.min(1f, settingsProgress));
+        float left = settingsPanel.left;
+        float top = settingsPanel.top;
+        float right = settingsPanel.right;
+        float bottom = settingsPanel.bottom;
+        float radius = dp(18);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb((int) (172 * progress), 0, 0, 0));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+
+        canvas.save();
+        float scale = 0.965f + 0.035f * progress;
+        canvas.scale(scale, scale, settingsPanel.centerX(), settingsPanel.centerY());
+
+        paint.setColor(0x22FFFFFF);
+        rect.set(left - dp(2), top - dp(2), right + dp(2), bottom + dp(2));
+        canvas.drawRoundRect(rect, radius + dp(2), radius + dp(2), paint);
+        paint.setColor(0xFF14161A);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.03f);
+        drawText(canvas, "桌面设置", left + dp(22), top + dp(30), sp(16), COLOR_CREAM);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "ADB / 系统快捷入口", left + dp(22), top + dp(48), sp(8), 0xFF747A83);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.14f);
+        drawText(canvas, "BACK 关闭", right - dp(16), top + dp(24), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(60), right - dp(16), top + dp(61), paint);
+
+        for (int i = 0; i < 4; i++) {
+            float rowTop = top + dp(70) + i * dp(50);
+            boolean selected = i == settingsIndex;
+            if (selected) {
+                rect.set(left + dp(8), rowTop + dp(4), right - dp(8), rowTop + dp(46));
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(COLOR_CARD_FOCUS);
+                canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+            }
+            int color = selected ? COLOR_INK : 0xFFD2CDC3;
+            textPaint.setTypeface(selected ? typeMedium : typeRegular);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            textPaint.setLetterSpacing(0.03f);
+            drawText(canvas, settingsLabel(i), left + dp(24),
+                    rowTop + dp(25) + sp(4.5f), sp(13), color);
+
+            textPaint.setTextAlign(Paint.Align.RIGHT);
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0f);
+            drawText(canvas, "›", right - dp(24), rowTop + dp(25) + sp(4.5f), sp(14),
+                    selected ? 0xFF4A4B4D : 0xFF5E646D);
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.03f);
+        drawText(canvas, "开发者选项被隐藏时，先到「关于设备」连点版本号。",
+                left + dp(22), top + dp(292), sp(7.5f), 0xFF6A7079);
+        canvas.restore();
     }
 
     private String menuLabel(int index) {
@@ -611,6 +795,7 @@ final class LauncherView extends View {
         drawApps(canvas);
         drawFooter(canvas);
         drawMenu(canvas);
+        drawSettings(canvas);
     }
 
     private void drawHeader(Canvas canvas) {
@@ -637,12 +822,34 @@ final class LauncherView extends View {
         textPaint.setLetterSpacing(0.08f);
         drawText(canvas, "留白", padH + dp(32) + brandWidth + dp(8), padTop + dp(15), sp(9), 0xFF747A83);
 
-        textPaint.setLetterSpacing(0.2f);
-        textPaint.setTextAlign(Paint.Align.RIGHT);
-        drawText(canvas, "HOME", getWidth() - padH, padTop + dp(15), sp(8), 0xFF666C75);
-        float homeWidth = textPaint.measureText("HOME");
-        textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, "01", getWidth() - padH - homeWidth - dp(9), padTop + dp(15), sp(9), 0xFFC7C2B8);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        // The single global control: press UP from the top row of apps.
+        float chipWidth = dp(72);
+        float chipHeight = dp(28);
+        float chipLeft = getWidth() - padH - chipWidth;
+        float chipTop = padTop - dp(2);
+        settingsChip.set(chipLeft, chipTop, chipLeft + chipWidth, chipTop + chipHeight);
+        if (headerFocused) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(withAlpha(COLOR_ACCENT, 0x24));
+            rect.set(settingsChip);
+            rect.inset(-dp(4), -dp(4));
+            canvas.drawRoundRect(rect, dp(18), dp(18), paint);
+        }
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(headerFocused ? COLOR_CARD_FOCUS : 0x16191D);
+        canvas.drawRoundRect(settingsChip, dp(14), dp(14), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(headerFocused ? 0x66FFFFFF : 0xFF30343B);
+        canvas.drawRoundRect(settingsChip, dp(14), dp(14), paint);
+        paint.setStyle(Paint.Style.FILL);
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, "↑ 设置", settingsChip.centerX(), settingsChip.centerY() + sp(3.2f),
+                sp(9), headerFocused ? COLOR_INK : 0xFFA5ABB3);
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
@@ -704,13 +911,14 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.28f);
         float titleWidth = textPaint.measureText("应用");
-        drawText(canvas, "APPS", gridLeft + titleWidth + dp(8), gridTop - dp(21), sp(8), 0xFF5B616A);
+        float appsX = gridLeft + titleWidth + dp(8);
+        drawText(canvas, "APPS", appsX, gridTop - dp(21), sp(8), 0xFF5B616A);
+        float appsWidth = textPaint.measureText("APPS");
 
-        textPaint.setTextAlign(Paint.Align.RIGHT);
-        textPaint.setLetterSpacing(0.08f);
         String count = loading && apps.isEmpty() ? "··" :
                 String.format(Locale.CHINA, "%02d", apps.size());
-        drawText(canvas, count, gridRight, gridTop - dp(21), sp(9), 0xFF747A83);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, count, appsX + appsWidth + dp(10), gridTop - dp(21), sp(8), 0xFF5B616A);
         textPaint.setTextAlign(Paint.Align.LEFT);
 
         paint.setStyle(Paint.Style.FILL);
@@ -758,7 +966,7 @@ final class LauncherView extends View {
 
     private void drawCard(Canvas canvas, int index, float top) {
         AppEntry entry = apps.get(index);
-        float focus = index < focusProgress.length ? focusProgress[index] : 0f;
+        float focus = !headerFocused && index < focusProgress.length ? focusProgress[index] : 0f;
         float scale = 1f + 0.045f * focus;
         float centerX = gridLeft + (index % columns) * (cardWidth + gapX) + cardWidth / 2f;
         float centerY = top + cardHeight / 2f;
@@ -1060,6 +1268,7 @@ final class LauncherView extends View {
         if (index < 0 || index >= apps.size() || index == focusedIndex) {
             return;
         }
+        headerFocused = false;
         int previous = focusedIndex;
         focusedIndex = index;
         if (animate) {
@@ -1153,6 +1362,35 @@ final class LauncherView extends View {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (settingsOpen) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    settingsIndex = (settingsIndex + 3) % 4;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    settingsIndex = (settingsIndex + 1) % 4;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                case KeyEvent.KEYCODE_BUTTON_A:
+                case KeyEvent.KEYCODE_SPACE:
+                    executeSettingsAction();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                case KeyEvent.KEYCODE_MENU:
+                    closeSettings(true);
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return true;
+                default:
+                    return super.onKeyDown(keyCode, event);
+            }
+        }
+
         if (menuOpen) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -1182,6 +1420,33 @@ final class LauncherView extends View {
             }
         }
 
+        if (headerFocused) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    headerFocused = false;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                case KeyEvent.KEYCODE_BUTTON_A:
+                case KeyEvent.KEYCODE_SPACE:
+                case KeyEvent.KEYCODE_MENU:
+                    openSettings();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                    headerFocused = false;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return true;
+                default:
+                    return super.onKeyDown(keyCode, event);
+            }
+        }
+
         if (event.getRepeatCount() > 0 && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
                 || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
             return true;
@@ -1192,6 +1457,12 @@ final class LauncherView extends View {
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 return moveFocus(1, 0);
             case KeyEvent.KEYCODE_DPAD_UP:
+                if (focusedIndex >= 0 && focusedIndex / columns == 0) {
+                    headerFocused = true;
+                    playSoundEffect(SoundEffectConstants.CLICK);
+                    invalidate();
+                    return true;
+                }
                 return moveFocus(0, -1);
             case KeyEvent.KEYCODE_DPAD_DOWN:
                 return moveFocus(0, 1);
@@ -1228,6 +1499,9 @@ final class LauncherView extends View {
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU) {
+            if (settingsOpen) {
+                return true;
+            }
             closeMenu();
             if (desktopSettingsAction != null) {
                 desktopSettingsAction.run();
@@ -1240,6 +1514,18 @@ final class LauncherView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
+        if (settingsOpen) {
+            if (action == MotionEvent.ACTION_UP) {
+                int row = settingsRowAt(event.getX(), event.getY());
+                if (row >= 0) {
+                    settingsIndex = row;
+                    executeSettingsAction();
+                } else if (!settingsPanel.contains(event.getX(), event.getY())) {
+                    closeSettings(true);
+                }
+            }
+            return true;
+        }
         if (menuOpen) {
             if (action == MotionEvent.ACTION_UP) {
                 int row = menuRowAt(event.getX(), event.getY());
@@ -1249,6 +1535,14 @@ final class LauncherView extends View {
                 } else if (!menuPanel.contains(event.getX(), event.getY())) {
                     closeMenu();
                 }
+            }
+            return true;
+        }
+        if (settingsChip.contains(event.getX(), event.getY())) {
+            if (action == MotionEvent.ACTION_UP) {
+                headerFocused = true;
+                openSettings();
+                performClick();
             }
             return true;
         }
