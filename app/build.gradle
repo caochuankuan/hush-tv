@@ -1,0 +1,49 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.hush.tv'
+    compileSdk 36
+
+    defaultConfig {
+        applicationId 'com.hush.tv'
+        minSdk 23
+        targetSdk 36
+        versionCode 3
+        versionName '1.2'
+    }
+
+    // Optional local debug keystore for reproducible sideload builds. It is
+    // git-ignored; a fresh clone falls back to Android's default debug key.
+    def localDebugKeystore = rootProject.file('keystore/debug.keystore')
+    if (localDebugKeystore.exists()) {
+        signingConfigs {
+            debug {
+                storeFile localDebugKeystore
+                storePassword 'android'
+                keyAlias 'androiddebugkey'
+                keyPassword 'android'
+            }
+        }
+    }
+
+    buildTypes {
+        // Debug and release both use the standard local Android debug key so
+        // contributors can build without a private signing key in the repo.
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+    }
+}

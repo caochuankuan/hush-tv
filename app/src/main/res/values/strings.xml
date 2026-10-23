@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">留白</string>
+    <string name="app_description">一张安静的电视桌面</string>
+    <string name="home_setup_title">把留白设为电视桌面？</string>
+    <string name="home_setup_message">设置后按 Home 键会回到这里。部分电视还需要重启或停用原桌面才会生效。</string>
+    <string name="home_setup_confirm">去设置</string>
+    <string name="home_setup_cancel">稍后</string>
+    <string name="home_setup_done">已设为默认桌面</string>
+    <string name="home_override_title">还需要停用原桌面</string>
+    <string name="home_override_message">系统仍把 %1$s 作为桌面。\n\n在电脑上执行：\nadb shell pm disable-user --user 0 %1$s\n\n然后按 Home 键。</string>
+    <string name="home_override_ok">知道了</string>
+    <string name="home_override_retry">重试</string>
+    <string name="home_info_title">桌面设置</string>
+    <string name="home_post_message">留白已是默认桌面。\n\n如果按 Home 仍回到原桌面，说明厂商桌面是常驻应用，需要在电脑上执行：\nadb shell pm disable-user --user 0 %1$s\n\n然后按 Home 键。</string>
+</resources>

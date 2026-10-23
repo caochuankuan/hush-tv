@@ -1,0 +1,1325 @@
+package com.hush.tv;
+
+import android.animation.ValueAnimator;
+import android.content.ActivityNotFoundException;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.LinearGradient;
+import android.graphics.Paint;
+import android.graphics.RadialGradient;
+import android.graphics.RectF;
+import android.graphics.Shader;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.text.TextPaint;
+import android.text.TextUtils;
+import android.view.KeyEvent;
+import android.view.MotionEvent;
+import android.view.SoundEffectConstants;
+import android.view.View;
+import android.view.animation.DecelerateInterpolator;
+import android.widget.Toast;
+
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.List;
+import java.util.Locale;
+import java.text.Collator;
+
+/**
+ * The whole TV desktop is one custom view. Keeping it in a single canvas gives us exact
+ * control over spacing, focus state and the quiet, low-contrast look.
+ */
+final class LauncherView extends View {
+
+    private static final int COLOR_BG_TOP = 0xFF0B0C0F;
+    private static final int COLOR_BG_BOTTOM = 0xFF070809;
+    private static final int COLOR_CREAM = 0xFFF2EEE5;
+    private static final int COLOR_DATE = 0xFFB6B1A7;
+    private static final int COLOR_MUTED = 0xFF858B94;
+    private static final int COLOR_DIM = 0xFF5A6069;
+    private static final int COLOR_HAIRLINE = 0xFF1D2025;
+    private static final int COLOR_CARD = 0xFF14161A;
+    private static final int COLOR_CARD_BORDER = 0xFF24272D;
+    private static final int COLOR_CARD_FOCUS = 0xFFF1EDE3;
+    private static final int COLOR_LABEL = 0xFFC9C5BC;
+    private static final int COLOR_INK = 0xFF0A0B0D;
+    private static final int COLOR_ACCENT = 0xFFE7A56A;
+
+    private static final String[] WEEKDAYS = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
+    private static final String PIN_PREFS = "hush_pins";
+    private static final String PIN_KEY = "pins";
+    private static final int MENU_OPEN = 0;
+    private static final int MENU_PIN = 1;
+    private static final int MENU_INFO = 2;
+    private static final int MENU_UNINSTALL = 3;
+    private static final int MENU_ITEM_COUNT = 4;
+
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final AppRepository repository;
+    private final SharedPreferences pinPrefs;
+    private final Collator collator;
+    private final List<String> pinnedKeys = new ArrayList<>();
+    private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+    private final Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+    private final TextPaint measurePaint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
+    private final RectF rect = new RectF();
+    private final RectF cardRect = new RectF();
+
+    private final Typeface typeLight = Typeface.create("sans-serif-light", Typeface.NORMAL);
+    private final Typeface typeRegular = Typeface.create("sans-serif", Typeface.NORMAL);
+    private final Typeface typeMedium = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+
+    private final float density;
+
+    private List<AppEntry> apps = Collections.emptyList();
+    private int focusedIndex = -1;
+    private int columns = 3;
+    private int visibleRows = 3;
+    private int rows = 0;
+
+    private float padH;
+    private float padTop;
+    private float leftWidth;
+    private float dividerX;
+    private float gridLeft;
+    private float gridRight;
+    private float gridTop;
+    private float gridBottom;
+    private float gridHeight;
+    private float gapX;
+    private float gapY;
+    private float cardWidth;
+    private float cardHeight;
+    private float gridOffsetY;
+    private float maxScroll;
+    private float scroll;
+    private float targetScroll;
+
+    private float[] focusProgress = new float[0];
+    private ValueAnimator[] focusAnimators = new ValueAnimator[0];
+    private ValueAnimator scrollAnimator;
+
+    private LinearGradient backgroundShader;
+    private RadialGradient warmGlow;
+    private RadialGradient coolGlow;
+    private RadialGradient vignette;
+    private LinearGradient dividerShader;
+
+    private String timeText = "";
+    private String dateText = "";
+    private String greeting = "";
+    private boolean clockRunning;
+    private boolean loading = false;
+    private boolean defaultHome = true;
+    private boolean attached;
+    private long lastLoadAt;
+    private int pressedIndex = -1;
+    private boolean refreshPending;
+
+    private Runnable desktopSettingsAction;
+    private boolean menuOpen;
+    private int menuIndex;
+    private AppEntry menuTarget;
+    private float menuProgress;
+    private ValueAnimator menuAnimator;
+    private final RectF menuPanel = new RectF();
+
+    private final Runnable clockTick = new Runnable() {
+        @Override
+        public void run() {
+            updateClock();
+            invalidate();
+            handler.postDelayed(this, millisToNextMinute());
+        }
+    };
+
+    LauncherView(Context context) {
+        super(context);
+        density = getResources().getDisplayMetrics().density;
+        repository = new AppRepository(context);
+        pinPrefs = context.getSharedPreferences(PIN_PREFS, Context.MODE_PRIVATE);
+        collator = Collator.getInstance(Locale.CHINA);
+        collator.setStrength(Collator.PRIMARY);
+        loadPins();
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        setClickable(true);
+        setBackgroundColor(COLOR_BG_BOTTOM);
+        updateClock();
+    }
+
+    private float dp(float value) {
+        return value * density;
+    }
+
+    private float sp(float value) {
+        return value * getResources().getDisplayMetrics().scaledDensity;
+    }
+
+    void onResume() {
+        startClock();
+        if (refreshPending) {
+            refreshPending = false;
+            reloadApps();
+        } else if (SystemClock.elapsedRealtime() - lastLoadAt > 20_000L) {
+            reloadApps();
+        }
+    }
+
+    void setOnDesktopSettings(Runnable action) {
+        desktopSettingsAction = action;
+    }
+
+    void onPause() {
+        stopClock();
+    }
+
+    void setDefaultHome(boolean isDefaultHome) {
+        if (defaultHome == isDefaultHome) {
+            return;
+        }
+        defaultHome = isDefaultHome;
+        invalidate();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        attached = true;
+        startClock();
+        if (apps.isEmpty()) {
+            reloadApps();
+        }
+        requestFocus();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        attached = false;
+        stopClock();
+        super.onDetachedFromWindow();
+    }
+
+    private void startClock() {
+        if (clockRunning) {
+            return;
+        }
+        clockRunning = true;
+        updateClock();
+        handler.postDelayed(clockTick, millisToNextMinute());
+    }
+
+    private static long millisToNextMinute() {
+        long now = System.currentTimeMillis();
+        return 60_000L - (now % 60_000L) + 50L;
+    }
+
+    private void stopClock() {
+        clockRunning = false;
+        handler.removeCallbacks(clockTick);
+    }
+
+    private void reloadApps() {
+        if (loading) {
+            return;
+        }
+        lastLoadAt = SystemClock.elapsedRealtime();
+        loading = true;
+        repository.load(loaded -> {
+            loading = false;
+            applyApps(loaded);
+        });
+        invalidate();
+    }
+
+    private void applyApps(List<AppEntry> loaded) {
+        String previousKey = null;
+        if (focusedIndex >= 0 && focusedIndex < apps.size()) {
+            previousKey = apps.get(focusedIndex).key();
+        }
+
+        closeMenu();
+        apps = loaded == null ? new ArrayList<>() : loaded;
+        sortApps();
+        if (getWidth() > 0) {
+            computeLayout();
+        }
+
+        focusProgress = new float[apps.size()];
+        cancelFocusAnimations();
+        focusAnimators = new ValueAnimator[apps.size()];
+
+        int next = 0;
+        if (previousKey != null) {
+            for (int i = 0; i < apps.size(); i++) {
+                if (previousKey.equals(apps.get(i).key())) {
+                    next = i;
+                    break;
+                }
+            }
+        }
+        focusedIndex = apps.isEmpty() ? -1 : next;
+        scroll = 0f;
+        targetScroll = 0f;
+        if (focusedIndex >= 0) {
+            focusProgress[focusedIndex] = 1f;
+            ensureVisible(focusedIndex, false);
+        }
+        invalidate();
+    }
+
+    private void cancelFocusAnimations() {
+        for (ValueAnimator animator : focusAnimators) {
+            if (animator != null) {
+                animator.cancel();
+            }
+        }
+    }
+
+    private void loadPins() {
+        pinnedKeys.clear();
+        String raw = pinPrefs.getString(PIN_KEY, "");
+        if (raw.isEmpty()) {
+            return;
+        }
+        for (String key : raw.split("\n")) {
+            String trimmed = key.trim();
+            if (!trimmed.isEmpty() && !pinnedKeys.contains(trimmed)) {
+                pinnedKeys.add(trimmed);
+            }
+        }
+    }
+
+    private void savePins() {
+        StringBuilder builder = new StringBuilder();
+        for (String key : pinnedKeys) {
+            if (builder.length() > 0) {
+                builder.append('\n');
+            }
+            builder.append(key);
+        }
+        pinPrefs.edit().putString(PIN_KEY, builder.toString()).apply();
+    }
+
+    private void sortApps() {
+        if (apps.size() < 2) {
+            return;
+        }
+        Collections.sort(apps, (a, b) -> {
+            int aPin = pinnedKeys.indexOf(a.key());
+            int bPin = pinnedKeys.indexOf(b.key());
+            if (aPin >= 0 || bPin >= 0) {
+                if (aPin < 0) {
+                    return 1;
+                }
+                if (bPin < 0) {
+                    return -1;
+                }
+                return Integer.compare(aPin, bPin);
+            }
+            return collator.compare(a.label, b.label);
+        });
+    }
+
+    private boolean isPinned(AppEntry entry) {
+        return entry != null && pinnedKeys.contains(entry.key());
+    }
+
+    private void togglePin(AppEntry target) {
+        boolean wasPinned = isPinned(target);
+        if (wasPinned) {
+            pinnedKeys.remove(target.key());
+        } else {
+            pinnedKeys.add(0, target.key());
+        }
+        savePins();
+        sortApps();
+        restoreFocusTo(target.key());
+        Toast.makeText(getContext(), wasPinned ? "已取消置顶" : "已置顶", Toast.LENGTH_SHORT).show();
+    }
+
+    private void restoreFocusTo(String key) {
+        cancelFocusAnimations();
+        focusProgress = new float[apps.size()];
+        focusAnimators = new ValueAnimator[apps.size()];
+        focusedIndex = -1;
+        for (int i = 0; i < apps.size(); i++) {
+            if (key.equals(apps.get(i).key())) {
+                focusedIndex = i;
+                break;
+            }
+        }
+        scroll = 0f;
+        targetScroll = 0f;
+        if (focusedIndex < 0 && !apps.isEmpty()) {
+            focusedIndex = 0;
+        }
+        if (focusedIndex >= 0) {
+            focusProgress[focusedIndex] = 1f;
+            ensureVisible(focusedIndex, false);
+        }
+        invalidate();
+    }
+
+    private void openMenu() {
+        if (focusedIndex < 0 || focusedIndex >= apps.size()) {
+            if (desktopSettingsAction != null) {
+                desktopSettingsAction.run();
+            }
+            return;
+        }
+        menuTarget = apps.get(focusedIndex);
+        menuOpen = true;
+        menuIndex = 0;
+        menuProgress = 0f;
+        computeMenuPanel();
+        if (menuAnimator != null) {
+            menuAnimator.cancel();
+        }
+        menuAnimator = ValueAnimator.ofFloat(0f, 1f);
+        menuAnimator.setDuration(150L);
+        menuAnimator.setInterpolator(new DecelerateInterpolator(2f));
+        menuAnimator.addUpdateListener(animation -> {
+            menuProgress = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        menuAnimator.start();
+        invalidate();
+    }
+
+    private void closeMenu() {
+        menuOpen = false;
+        menuTarget = null;
+        menuProgress = 0f;
+        if (menuAnimator != null) {
+            menuAnimator.cancel();
+            menuAnimator = null;
+        }
+        invalidate();
+    }
+
+    private void computeMenuPanel() {
+        float width = dp(312);
+        float height = dp(258);
+        float left = (getWidth() - width) / 2f;
+        float top = (getHeight() - height) / 2f;
+        menuPanel.set(left, top, left + width, top + height);
+    }
+
+    private String menuLabel(int index) {
+        switch (index) {
+            case MENU_OPEN:
+                return "打开";
+            case MENU_PIN:
+                return isPinned(menuTarget) ? "取消置顶" : "置顶";
+            case MENU_INFO:
+                return "信息";
+            case MENU_UNINSTALL:
+            default:
+                return "卸载";
+        }
+    }
+
+    private void executeMenuAction() {
+        AppEntry target = menuTarget;
+        int action = menuIndex;
+        if (target == null) {
+            closeMenu();
+            return;
+        }
+        closeMenu();
+        switch (action) {
+            case MENU_OPEN:
+                launch(target);
+                break;
+            case MENU_PIN:
+                togglePin(target);
+                break;
+            case MENU_INFO:
+                openAppInfo(target);
+                break;
+            case MENU_UNINSTALL:
+                uninstallApp(target);
+                break;
+            default:
+                break;
+        }
+    }
+
+    private void openAppInfo(AppEntry entry) {
+        Intent intent = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + entry.component.getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(getContext(), "没有找到应用信息", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void uninstallApp(AppEntry entry) {
+        refreshPending = true;
+        Intent intent = new Intent(Intent.ACTION_DELETE,
+                Uri.parse("package:" + entry.component.getPackageName()));
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            getContext().startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            refreshPending = false;
+            Toast.makeText(getContext(), "无法打开卸载界面", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private int menuRowAt(float x, float y) {
+        if (!menuOpen || !menuPanel.contains(x, y)) {
+            return -1;
+        }
+        float rowsTop = menuPanel.top + dp(64);
+        if (y < rowsTop) {
+            return -2;
+        }
+        int row = (int) ((y - rowsTop) / dp(46));
+        return row >= 0 && row < MENU_ITEM_COUNT ? row : -1;
+    }
+
+    private void updateClock() {
+        Calendar now = Calendar.getInstance();
+        int hour = now.get(Calendar.HOUR_OF_DAY);
+        int minute = now.get(Calendar.MINUTE);
+        timeText = String.format(Locale.CHINA, "%02d:%02d", hour, minute);
+        dateText = String.format(Locale.CHINA, "%d月%d日  %s",
+                now.get(Calendar.MONTH) + 1,
+                now.get(Calendar.DAY_OF_MONTH),
+                WEEKDAYS[now.get(Calendar.DAY_OF_WEEK) - 1]);
+        if (hour < 5) {
+            greeting = "夜深了";
+        } else if (hour < 11) {
+            greeting = "早上好";
+        } else if (hour < 14) {
+            greeting = "中午好";
+        } else if (hour < 18) {
+            greeting = "下午好";
+        } else {
+            greeting = "晚上好";
+        }
+    }
+
+    @Override
+    protected void onSizeChanged(int w, int h, int oldw, int oldh) {
+        super.onSizeChanged(w, h, oldw, oldh);
+        computeLayout();
+        buildBackground(w, h);
+    }
+
+    private void computeLayout() {
+        int w = getWidth();
+        int h = getHeight();
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+
+        padH = w * 0.0542f;
+        padTop = h * 0.0704f;
+        leftWidth = w * 0.2625f;
+        dividerX = padH + leftWidth + dp(20);
+        gridLeft = dividerX + dp(32);
+        gridRight = w - padH;
+        gridTop = h * 0.1704f;
+        gridBottom = h - dp(52);
+        gridHeight = Math.max(dp(120), gridBottom - gridTop);
+        gapX = dp(12);
+        gapY = dp(12);
+
+        int count = apps.size();
+        columns = count <= 4 ? 2 : 3;
+        visibleRows = columns == 2 ? 2 : 3;
+        rowMetrics();
+
+        float contentHeight = contentHeight();
+        gridOffsetY = contentHeight < gridHeight ? (gridHeight - contentHeight) / 2f : 0f;
+        maxScroll = Math.max(0f, contentHeight - gridHeight);
+        if (scroll > maxScroll) {
+            scroll = maxScroll;
+            targetScroll = maxScroll;
+        }
+        if (maxScroll <= 0f) {
+            scroll = 0f;
+            targetScroll = 0f;
+        }
+    }
+
+    private void rowMetrics() {
+        cardWidth = (gridRight - gridLeft - (columns - 1) * gapX) / columns;
+        cardHeight = (gridHeight - (visibleRows - 1) * gapY) / visibleRows;
+        rows = apps.isEmpty() ? 0 : (apps.size() + columns - 1) / columns;
+    }
+
+    private float contentHeight() {
+        if (rows <= 0) {
+            return 0f;
+        }
+        return rows * cardHeight + (rows - 1) * gapY;
+    }
+
+    private void buildBackground(int w, int h) {
+        backgroundShader = new LinearGradient(0, 0, 0, h,
+                new int[]{COLOR_BG_TOP, 0xFF090A0C, COLOR_BG_BOTTOM},
+                new float[]{0f, 0.55f, 1f}, Shader.TileMode.CLAMP);
+        warmGlow = new RadialGradient(w * 0.82f, -h * 0.08f, w * 0.72f,
+                new int[]{0x46C58A5B, 0x1C9A623E, 0x00000000},
+                new float[]{0f, 0.42f, 1f}, Shader.TileMode.CLAMP);
+        coolGlow = new RadialGradient(w * 0.02f, h * 1.04f, w * 0.62f,
+                new int[]{0x2A1B545A, 0x0E123438, 0x00000000},
+                new float[]{0f, 0.5f, 1f}, Shader.TileMode.CLAMP);
+        vignette = new RadialGradient(w * 0.5f, h * 0.48f, w * 0.72f,
+                new int[]{0x00000000, 0x00000000, 0x6E000000},
+                new float[]{0f, 0.62f, 1f}, Shader.TileMode.CLAMP);
+        dividerShader = new LinearGradient(0, padTop, 0, h - dp(44),
+                new int[]{0x001D2025, 0x381D2025, 0x001D2025},
+                new float[]{0f, 0.2f, 1f}, Shader.TileMode.CLAMP);
+    }
+
+    @Override
+    protected void onDraw(Canvas canvas) {
+        super.onDraw(canvas);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(backgroundShader);
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+
+        paint.setShader(warmGlow);
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        paint.setShader(coolGlow);
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        paint.setShader(vignette);
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        paint.setShader(null);
+
+        drawHeader(canvas);
+        drawHero(canvas);
+        drawDivider(canvas);
+        drawApps(canvas);
+        drawFooter(canvas);
+        drawMenu(canvas);
+    }
+
+    private void drawHeader(Canvas canvas) {
+        // A tiny version of the app mark: a cream ring and one amber dot.
+        float size = dp(21);
+        float cx = padH + size / 2f;
+        float cy = padTop + size / 2f;
+        textPaint.setStyle(Paint.Style.STROKE);
+        textPaint.setStrokeWidth(dp(1.15f));
+        textPaint.setColor(0xFFEDE8DE);
+        canvas.drawArc(new RectF(padH + dp(2), padTop + dp(2),
+                padH + size - dp(2), padTop + size - dp(2)), -70f, 305f, false, textPaint);
+        textPaint.setStyle(Paint.Style.FILL);
+        textPaint.setColor(COLOR_ACCENT);
+        canvas.drawCircle(padH + size * 0.78f, padTop + size * 0.22f, dp(2.2f), textPaint);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.18f);
+        drawText(canvas, "HUSH", padH + dp(32), padTop + dp(15), sp(14), COLOR_CREAM);
+
+        float brandWidth = textPaint.measureText("HUSH");
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "留白", padH + dp(32) + brandWidth + dp(8), padTop + dp(15), sp(9), 0xFF747A83);
+
+        textPaint.setLetterSpacing(0.2f);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        drawText(canvas, "HOME", getWidth() - padH, padTop + dp(15), sp(8), 0xFF666C75);
+        float homeWidth = textPaint.measureText("HOME");
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "01", getWidth() - padH - homeWidth - dp(9), padTop + dp(15), sp(9), 0xFFC7C2B8);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawHero(Canvas canvas) {
+        float x = padH;
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.24f);
+        textPaint.setColor(COLOR_ACCENT);
+        canvas.drawCircle(x + dp(2), gridTop + dp(51), dp(2), textPaint);
+        drawText(canvas, "现在", x + dp(11), gridTop + dp(55), sp(9), 0xFF7A8089);
+
+        textPaint.setTypeface(typeLight);
+        textPaint.setLetterSpacing(-0.035f);
+        textPaint.setFontFeatureSettings("tnum");
+        float clockSize = sp(84);
+        textPaint.setTextSize(clockSize);
+        float clockWidth = textPaint.measureText(timeText);
+        if (clockWidth > leftWidth + dp(6)) {
+            clockSize *= (leftWidth + dp(6)) / clockWidth;
+        }
+        drawText(canvas, timeText, x, dp(248), clockSize, COLOR_CREAM);
+        textPaint.setFontFeatureSettings(null);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.055f);
+        drawText(canvas, dateText, x + dp(2), dp(285), sp(14), COLOR_DATE);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, greeting, x + dp(2), dp(322), sp(17), 0xFFE7E2D8);
+
+        textPaint.setStyle(Paint.Style.STROKE);
+        textPaint.setStrokeWidth(dp(1));
+        textPaint.setShader(dividerShader);
+        canvas.drawLine(x + dp(2), dp(360), x + dp(30), dp(360), textPaint);
+        textPaint.setShader(null);
+        textPaint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "少一点，刚刚好。", x + dp(2), dp(390), sp(10), 0xFF686E77);
+    }
+
+    private void drawDivider(Canvas canvas) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setShader(dividerShader);
+        canvas.drawRect(dividerX, padTop, dividerX + dp(0.8f), getHeight() - dp(44), paint);
+        paint.setShader(null);
+    }
+
+    private void drawApps(Canvas canvas) {
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "应用", gridLeft, gridTop - dp(21), sp(12), 0xFFE9E4DA);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.28f);
+        float titleWidth = textPaint.measureText("应用");
+        drawText(canvas, "APPS", gridLeft + titleWidth + dp(8), gridTop - dp(21), sp(8), 0xFF5B616A);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.08f);
+        String count = loading && apps.isEmpty() ? "··" :
+                String.format(Locale.CHINA, "%02d", apps.size());
+        drawText(canvas, count, gridRight, gridTop - dp(21), sp(9), 0xFF747A83);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(COLOR_HAIRLINE);
+        canvas.drawRect(gridLeft, gridTop - dp(9), gridRight, gridTop - dp(8.2f), paint);
+
+        if (loading && apps.isEmpty()) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.12f);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            drawText(canvas, "正在整理桌面", (gridLeft + gridRight) / 2f,
+                    gridTop + gridHeight / 2f, sp(11), 0xFF777D86);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            return;
+        }
+
+        if (apps.isEmpty()) {
+            textPaint.setTypeface(typeMedium);
+            textPaint.setLetterSpacing(0.03f);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            drawText(canvas, "这里还没有应用", (gridLeft + gridRight) / 2f,
+                    gridTop + gridHeight / 2f - dp(6), sp(15), 0xFFD2CDC3);
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.1f);
+            drawText(canvas, "按 OK 打开系统设置", (gridLeft + gridRight) / 2f,
+                    gridTop + gridHeight / 2f + dp(20), sp(10), 0xFF737983);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            return;
+        }
+
+        canvas.save();
+        canvas.clipRect(gridLeft - dp(12), gridTop - dp(2), gridRight + dp(12), gridBottom + dp(2));
+        for (int i = 0; i < apps.size(); i++) {
+            int row = i / columns;
+            float top = gridTop + gridOffsetY + row * (cardHeight + gapY) - scroll;
+            if (top + cardHeight < gridTop - dp(8) || top > gridBottom + dp(8)) {
+                continue;
+            }
+            drawCard(canvas, i, top);
+        }
+        canvas.restore();
+
+        drawScrollBar(canvas);
+    }
+
+    private void drawCard(Canvas canvas, int index, float top) {
+        AppEntry entry = apps.get(index);
+        float focus = index < focusProgress.length ? focusProgress[index] : 0f;
+        float scale = 1f + 0.045f * focus;
+        float centerX = gridLeft + (index % columns) * (cardWidth + gapX) + cardWidth / 2f;
+        float centerY = top + cardHeight / 2f;
+
+        canvas.save();
+        canvas.scale(scale, scale, centerX, centerY);
+        float drawTop = top - dp(3) * focus;
+
+        cardRect.set(centerX - cardWidth / 2f, drawTop,
+                centerX + cardWidth / 2f, drawTop + cardHeight);
+        float radius = dp(18);
+
+        if (focus > 0.01f) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(withAlpha(COLOR_ACCENT, (int) (0x1C * focus)));
+            rect.set(cardRect);
+            rect.inset(-dp(7), -dp(7));
+            canvas.drawRoundRect(rect, radius + dp(7), radius + dp(7), paint);
+            paint.setColor(withAlpha(0xFFFFFFFF, (int) (0x0C * focus)));
+            rect.set(cardRect);
+            rect.inset(-dp(3), -dp(3));
+            canvas.drawRoundRect(rect, radius + dp(3), radius + dp(3), paint);
+        }
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(blend(COLOR_CARD, COLOR_CARD_FOCUS, focus));
+        canvas.drawRoundRect(cardRect, radius, radius, paint);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(blend(COLOR_CARD_BORDER, 0x66FFFFFF, focus));
+        canvas.drawRoundRect(cardRect, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        float tile = Math.min(cardWidth * 0.245f, cardHeight * 0.34f);
+        tile = Math.max(dp(36), Math.min(dp(66), tile));
+        float iconCenterY = cardRect.top + cardHeight * 0.385f;
+        rect.set(centerX - tile / 2f, iconCenterY - tile / 2f,
+                centerX + tile / 2f, iconCenterY + tile / 2f);
+        paint.setColor(0xFF0B0C0F);
+        canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(0.8f));
+        paint.setColor(0x1FFFFFFF);
+        canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        float iconSize = tile * 0.76f;
+        if (entry.icon != null) {
+            rect.set(centerX - iconSize / 2f, iconCenterY - iconSize / 2f,
+                    centerX + iconSize / 2f, iconCenterY + iconSize / 2f);
+            paint.setAlpha(255);
+            canvas.drawBitmap(entry.icon, null, rect, paint);
+        } else {
+            textPaint.setTypeface(typeMedium);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            textPaint.setLetterSpacing(0);
+            String letter = entry.label.isEmpty() ? "?" : entry.label.substring(0, 1);
+            drawText(canvas, letter, centerX, iconCenterY + sp(9), sp(20), COLOR_CREAM);
+        }
+
+        float labelSize = cardWidth > dp(220) ? sp(16) : sp(14);
+        measurePaint.set(textPaint);
+        measurePaint.setTypeface(typeMedium);
+        measurePaint.setTextSize(labelSize);
+        measurePaint.setLetterSpacing(0.02f);
+        CharSequence label = TextUtils.ellipsize(entry.label, measurePaint,
+                cardWidth - dp(24), TextUtils.TruncateAt.END);
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        textPaint.setLetterSpacing(0.02f);
+        drawText(canvas, label.toString(), centerX, cardRect.top + cardHeight * 0.845f,
+                labelSize, blend(COLOR_LABEL, COLOR_INK, focus));
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        if (isPinned(entry)) {
+            paint.setColor(withAlpha(COLOR_ACCENT, focus > 0.5f ? 210 : 145));
+            canvas.drawCircle(cardRect.left + dp(13), cardRect.top + dp(13), dp(2.2f), paint);
+        }
+
+        if (focus > 0.01f) {
+            paint.setColor(withAlpha(COLOR_ACCENT, (int) (255 * focus)));
+            canvas.drawCircle(cardRect.right - dp(13), cardRect.top + dp(13), dp(2.4f), paint);
+        }
+
+        canvas.restore();
+    }
+
+    private void drawScrollBar(Canvas canvas) {
+        if (maxScroll <= 0f || rows <= visibleRows) {
+            return;
+        }
+        float trackTop = gridTop;
+        float trackBottom = gridBottom;
+        float trackHeight = trackBottom - trackTop;
+        float thumbHeight = Math.max(dp(28), trackHeight * visibleRows / rows);
+        float thumbTop = trackTop + (trackHeight - thumbHeight) * (scroll / maxScroll);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0x18FFFFFF);
+        canvas.drawRoundRect(gridRight + dp(13), trackTop, gridRight + dp(15), trackBottom,
+                dp(1), dp(1), paint);
+        paint.setColor(0x66D8D3C9);
+        canvas.drawRoundRect(gridRight + dp(13), thumbTop, gridRight + dp(15), thumbTop + thumbHeight,
+                dp(1), dp(1), paint);
+    }
+
+    private void drawFooter(Canvas canvas) {
+        float baseline = getHeight() - dp(26);
+        float x = padH;
+
+        drawKeycap(canvas, x, baseline, "OK", dp(29));
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "打开", x + dp(37), baseline - dp(1), sp(10), 0xFF7A8089);
+
+        float groupX = x + dp(93);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "← ↑ ↓ →", groupX, baseline - dp(1), sp(9), 0xFF9BA0A7);
+        drawText(canvas, "选择", groupX + dp(54), baseline - dp(1), sp(10), 0xFF7A8089);
+        drawText(canvas, "MENU 操作", x + dp(190), baseline - dp(1), sp(9), 0xFF7A8089);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.16f);
+        if (defaultHome) {
+            drawText(canvas, "HUSH  /  留白", getWidth() - padH, baseline - dp(1), sp(8), 0xFF4E545C);
+        } else {
+            drawText(canvas, "长按 MENU 桌面设置", getWidth() - padH, baseline - dp(1), sp(8), COLOR_ACCENT);
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawMenu(Canvas canvas) {
+        if (!menuOpen || menuTarget == null || menuProgress <= 0f) {
+            return;
+        }
+        computeMenuPanel();
+        float progress = Math.max(0f, Math.min(1f, menuProgress));
+        float left = menuPanel.left;
+        float top = menuPanel.top;
+        float right = menuPanel.right;
+        float bottom = menuPanel.bottom;
+        float radius = dp(18);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb((int) (172 * progress), 0, 0, 0));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+
+        canvas.save();
+        float scale = 0.965f + 0.035f * progress;
+        canvas.scale(scale, scale, menuPanel.centerX(), menuPanel.centerY());
+
+        paint.setColor(0x22FFFFFF);
+        rect.set(left - dp(2), top - dp(2), right + dp(2), bottom + dp(2));
+        canvas.drawRoundRect(rect, radius + dp(2), radius + dp(2), paint);
+        paint.setColor(0xFF14161A);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        float tile = dp(38);
+        float tileLeft = left + dp(16);
+        float tileTop = top + dp(13);
+        rect.set(tileLeft, tileTop, tileLeft + tile, tileTop + tile);
+        paint.setColor(0xFF0B0C0F);
+        canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(0.8f));
+        paint.setColor(0x22FFFFFF);
+        canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
+        paint.setStyle(Paint.Style.FILL);
+        if (menuTarget.icon != null) {
+            paint.setAlpha(255);
+            rect.set(tileLeft + tile * 0.13f, tileTop + tile * 0.13f,
+                    tileLeft + tile * 0.87f, tileTop + tile * 0.87f);
+            canvas.drawBitmap(menuTarget.icon, null, rect, paint);
+        }
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.02f);
+        measurePaint.setTypeface(typeMedium);
+        measurePaint.setTextSize(sp(15));
+        measurePaint.setLetterSpacing(0.02f);
+        CharSequence title = TextUtils.ellipsize(menuTarget.label, measurePaint,
+                menuPanel.width() - dp(132), TextUtils.TruncateAt.END);
+        drawText(canvas, title.toString(), left + dp(66), top + dp(32), sp(15), COLOR_CREAM);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.1f);
+        String subtitle = isPinned(menuTarget) ? "已置顶  ·  应用操作" : "应用操作";
+        drawText(canvas, subtitle, left + dp(66), top + dp(48), sp(8),
+                isPinned(menuTarget) ? 0xFFD6B488 : 0xFF747A83);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.14f);
+        drawText(canvas, "BACK 关闭", right - dp(16), top + dp(24), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(59), right - dp(16), top + dp(60), paint);
+
+        for (int i = 0; i < MENU_ITEM_COUNT; i++) {
+            float rowTop = top + dp(64) + i * dp(46);
+            boolean selected = i == menuIndex;
+            if (selected) {
+                rect.set(left + dp(8), rowTop + dp(3), right - dp(8), rowTop + dp(43));
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(COLOR_CARD_FOCUS);
+                canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+            }
+            int color;
+            if (i == MENU_UNINSTALL) {
+                color = selected ? 0xFF8B2E23 : 0xFFD38A7C;
+            } else {
+                color = selected ? COLOR_INK : 0xFFD2CDC3;
+            }
+            textPaint.setTypeface(selected ? typeMedium : typeRegular);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            textPaint.setLetterSpacing(0.03f);
+            drawText(canvas, menuLabel(i), left + dp(24),
+                    rowTop + dp(24) + sp(4.5f), sp(13), color);
+        }
+
+        canvas.restore();
+    }
+
+    private void drawKeycap(Canvas canvas, float x, float baseline, String label, float width) {
+        float top = baseline - dp(13);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0xFF3B3F46);
+        canvas.drawRoundRect(x, top, x + width, top + dp(18), dp(5), dp(5), paint);
+        paint.setStyle(Paint.Style.FILL);
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, label, x + width / 2f, baseline - dp(3.5f), sp(8), 0xFFC4BEB4);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawText(Canvas canvas, String text, float x, float y, float size, int color) {
+        textPaint.setTextSize(size);
+        textPaint.setColor(color);
+        textPaint.setStyle(Paint.Style.FILL);
+        canvas.drawText(text, x, y, textPaint);
+    }
+
+    private void ensureVisible(int index, boolean animate) {
+        if (index < 0 || appRows() == 0) {
+            return;
+        }
+        int row = index / columns;
+        float top = row * (cardHeight + gapY);
+        float bottom = top + cardHeight;
+        float target = targetScroll;
+        if (top < target) {
+            target = top;
+        } else if (bottom > target + gridHeight) {
+            target = bottom - gridHeight;
+        }
+        target = Math.max(0f, Math.min(maxScroll, target));
+        if (Math.abs(target - targetScroll) < 0.5f) {
+            return;
+        }
+        targetScroll = target;
+        if (animate) {
+            animateScroll(target);
+        } else {
+            scroll = target;
+            invalidate();
+        }
+    }
+
+    private int appRows() {
+        return rows;
+    }
+
+    private void animateScroll(float target) {
+        if (scrollAnimator != null) {
+            scrollAnimator.cancel();
+        }
+        scrollAnimator = ValueAnimator.ofFloat(scroll, target);
+        scrollAnimator.setDuration(220L);
+        scrollAnimator.setInterpolator(new DecelerateInterpolator(1.6f));
+        scrollAnimator.addUpdateListener(animation -> {
+            scroll = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        scrollAnimator.start();
+    }
+
+    private void setFocus(int index, boolean animate) {
+        if (index < 0 || index >= apps.size() || index == focusedIndex) {
+            return;
+        }
+        int previous = focusedIndex;
+        focusedIndex = index;
+        if (animate) {
+            animateFocus(previous, 0f);
+            animateFocus(index, 1f);
+        } else {
+            if (previous >= 0 && previous < focusProgress.length) {
+                focusProgress[previous] = 0f;
+            }
+            focusProgress[index] = 1f;
+        }
+        ensureVisible(index, true);
+        invalidate();
+    }
+
+    private void animateFocus(int index, float target) {
+        if (index < 0 || index >= focusProgress.length) {
+            return;
+        }
+        if (focusAnimators[index] != null) {
+            focusAnimators[index].cancel();
+        }
+        ValueAnimator animator = ValueAnimator.ofFloat(focusProgress[index], target);
+        animator.setDuration(180L);
+        animator.setInterpolator(new DecelerateInterpolator(1.8f));
+        animator.addUpdateListener(animation -> {
+            focusProgress[index] = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        focusAnimators[index] = animator;
+        animator.start();
+    }
+
+    private boolean moveFocus(int dx, int dy) {
+        if (apps.isEmpty()) {
+            return false;
+        }
+        int col = focusedIndex % columns;
+        int row = focusedIndex / columns;
+        int targetCol = col + dx;
+        int targetRow = row + dy;
+        if (targetCol < 0 || targetCol >= columns || targetRow < 0) {
+            return true;
+        }
+        int target = targetRow * columns + targetCol;
+        if (target >= apps.size()) {
+            return true;
+        }
+        setFocus(target, true);
+        playSoundEffect(SoundEffectConstants.CLICK);
+        return true;
+    }
+
+    private void launchFocused() {
+        if (focusedIndex >= 0 && focusedIndex < apps.size()) {
+            launch(apps.get(focusedIndex));
+        } else if (apps.isEmpty()) {
+            openSystemSettings();
+        }
+    }
+
+    private void launch(AppEntry entry) {
+        Intent intent = new Intent(Intent.ACTION_MAIN);
+        intent.addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER);
+        intent.setComponent(entry.component);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED);
+        try {
+            getContext().startActivity(intent);
+        } catch (ActivityNotFoundException first) {
+            try {
+                Intent fallback = new Intent(Intent.ACTION_MAIN);
+                fallback.addCategory(Intent.CATEGORY_LAUNCHER);
+                fallback.setComponent(entry.component);
+                fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                getContext().startActivity(fallback);
+            } catch (ActivityNotFoundException second) {
+                Toast.makeText(getContext(), "打不开 " + entry.label, Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
+
+    private void openSystemSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (ActivityNotFoundException e) {
+            Toast.makeText(getContext(), "没有找到系统设置", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (menuOpen) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    menuIndex = (menuIndex + MENU_ITEM_COUNT - 1) % MENU_ITEM_COUNT;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    menuIndex = (menuIndex + 1) % MENU_ITEM_COUNT;
+                    invalidate();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                case KeyEvent.KEYCODE_BUTTON_A:
+                case KeyEvent.KEYCODE_SPACE:
+                    executeMenuAction();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                case KeyEvent.KEYCODE_MENU:
+                    closeMenu();
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    return true;
+                default:
+                    return super.onKeyDown(keyCode, event);
+            }
+        }
+
+        if (event.getRepeatCount() > 0 && (keyCode == KeyEvent.KEYCODE_DPAD_CENTER
+                || keyCode == KeyEvent.KEYCODE_ENTER || keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER)) {
+            return true;
+        }
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_DPAD_LEFT:
+                return moveFocus(-1, 0);
+            case KeyEvent.KEYCODE_DPAD_RIGHT:
+                return moveFocus(1, 0);
+            case KeyEvent.KEYCODE_DPAD_UP:
+                return moveFocus(0, -1);
+            case KeyEvent.KEYCODE_DPAD_DOWN:
+                return moveFocus(0, 1);
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_NUMPAD_ENTER:
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_SPACE:
+                launchFocused();
+                return true;
+            case KeyEvent.KEYCODE_MENU:
+                if (event.getRepeatCount() == 0) {
+                    event.startTracking();
+                    if (!apps.isEmpty() && focusedIndex >= 0) {
+                        openMenu();
+                    } else if (desktopSettingsAction != null) {
+                        desktopSettingsAction.run();
+                    }
+                }
+                return true;
+            case KeyEvent.KEYCODE_INFO:
+            case KeyEvent.KEYCODE_SETTINGS:
+                if (desktopSettingsAction != null) {
+                    desktopSettingsAction.run();
+                }
+                return true;
+            case KeyEvent.KEYCODE_BACK:
+                return true;
+            default:
+                return super.onKeyDown(keyCode, event);
+        }
+    }
+
+    @Override
+    public boolean onKeyLongPress(int keyCode, KeyEvent event) {
+        if (keyCode == KeyEvent.KEYCODE_MENU) {
+            closeMenu();
+            if (desktopSettingsAction != null) {
+                desktopSettingsAction.run();
+            }
+            return true;
+        }
+        return super.onKeyLongPress(keyCode, event);
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (menuOpen) {
+            if (action == MotionEvent.ACTION_UP) {
+                int row = menuRowAt(event.getX(), event.getY());
+                if (row >= 0) {
+                    menuIndex = row;
+                    executeMenuAction();
+                } else if (!menuPanel.contains(event.getX(), event.getY())) {
+                    closeMenu();
+                }
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_MOVE) {
+            int hit = hitTest(event.getX(), event.getY());
+            if (hit != pressedIndex) {
+                pressedIndex = hit;
+                invalidate();
+            }
+            return true;
+        }
+        if (action == MotionEvent.ACTION_UP) {
+            int hit = hitTest(event.getX(), event.getY());
+            if (hit >= 0 && hit < apps.size()) {
+                setFocus(hit, true);
+                pressedIndex = -1;
+                performClick();
+                launchFocused();
+                return true;
+            }
+            if (apps.isEmpty()) {
+                performClick();
+                openSystemSettings();
+            }
+            pressedIndex = -1;
+            invalidate();
+            return true;
+        }
+        if (action == MotionEvent.ACTION_CANCEL) {
+            pressedIndex = -1;
+            invalidate();
+            return true;
+        }
+        return super.onTouchEvent(event);
+    }
+
+    private int hitTest(float x, float y) {
+        if (apps.isEmpty()) {
+            return -1;
+        }
+        for (int i = 0; i < apps.size(); i++) {
+            int row = i / columns;
+            float top = gridTop + gridOffsetY + row * (cardHeight + gapY) - scroll;
+            if (top + cardHeight < gridTop || top > gridBottom) {
+                continue;
+            }
+            float left = gridLeft + (i % columns) * (cardWidth + gapX);
+            if (x >= left && x <= left + cardWidth && y >= top && y <= top + cardHeight) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    @Override
+    public boolean performClick() {
+        super.performClick();
+        return true;
+    }
+
+    private static int blend(int from, int to, float t) {
+        float clamped = Math.max(0f, Math.min(1f, t));
+        int a = (int) (Color.alpha(from) + (Color.alpha(to) - Color.alpha(from)) * clamped);
+        int r = (int) (Color.red(from) + (Color.red(to) - Color.red(from)) * clamped);
+        int g = (int) (Color.green(from) + (Color.green(to) - Color.green(from)) * clamped);
+        int b = (int) (Color.blue(from) + (Color.blue(to) - Color.blue(from)) * clamped);
+        return Color.argb(a, r, g, b);
+    }
+
+    private static int withAlpha(int color, int alpha) {
+        return Color.argb(Math.max(0, Math.min(255, alpha)),
+                Color.red(color), Color.green(color), Color.blue(color));
+    }
+}
