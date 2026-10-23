@@ -32,7 +32,13 @@ import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.SoundEffectConstants;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.DecelerateInterpolator;
+import android.widget.CheckBox;
+import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.File;
@@ -72,12 +78,16 @@ final class LauncherView extends View {
     private static final String[] WEEKDAYS = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
     private static final String PIN_PREFS = "hush_pins";
     private static final String PIN_KEY = "pins";
+    private static final String LAYOUT_PREFS = "hush_layout";
+    private static final String LAYOUT_PURE = "pure_mode";
+    private static final String LAYOUT_TAGLINE = "show_tagline";
+    private static final String LAYOUT_CLOCK = "clock_position";
     private static final int MENU_OPEN = 0;
     private static final int MENU_PIN = 1;
     private static final int MENU_INFO = 2;
     private static final int MENU_UNINSTALL = 3;
     private static final int MENU_ITEM_COUNT = 4;
-    private static final int SETTINGS_ITEM_COUNT = 6;
+    private static final int SETTINGS_ITEM_COUNT = 7;
     private static final long[] SCREEN_TIMEOUT_VALUES = {
             5L * 60 * 1000, 10L * 60 * 1000, 15L * 60 * 1000,
             30L * 60 * 1000, 60L * 60 * 1000, Integer.MAX_VALUE
@@ -89,6 +99,7 @@ final class LauncherView extends View {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AppRepository repository;
     private final SharedPreferences pinPrefs;
+    private final SharedPreferences layoutPrefs;
     private final Collator collator;
     private final List<String> pinnedKeys = new ArrayList<>();
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
@@ -157,6 +168,9 @@ final class LauncherView extends View {
     private ValueAnimator settingsAnimator;
     private final RectF settingsPanel = new RectF();
     private String screenTimeoutSummary = "—";
+    private boolean pureMode;
+    private boolean showTagline;
+    private String clockPosition = "left";
     private boolean pushOpen;
     private String pushUrl = "";
     private String pushStatus = "";
@@ -203,6 +217,10 @@ final class LauncherView extends View {
         density = getResources().getDisplayMetrics().density;
         repository = new AppRepository(context);
         pinPrefs = context.getSharedPreferences(PIN_PREFS, Context.MODE_PRIVATE);
+        layoutPrefs = context.getSharedPreferences(LAYOUT_PREFS, Context.MODE_PRIVATE);
+        pureMode = layoutPrefs.getBoolean(LAYOUT_PURE, false);
+        showTagline = layoutPrefs.getBoolean(LAYOUT_TAGLINE, true);
+        clockPosition = layoutPrefs.getString(LAYOUT_CLOCK, "left");
         collator = Collator.getInstance(Locale.CHINA);
         collator.setStrength(Collator.PRIMARY);
         loadPins();
@@ -543,7 +561,7 @@ final class LauncherView extends View {
 
     private void computeSettingsPanel() {
         float width = dp(360);
-        float height = dp(410);
+        float height = dp(460);
         float left = (getWidth() - width) / 2f;
         float top = (getHeight() - height) / 2f;
         settingsPanel.set(left, top, left + width, top + height);
@@ -562,9 +580,161 @@ final class LauncherView extends View {
             case 4:
                 return "熄屏时间";
             case 5:
+                return "布局设置";
+            case 6:
             default:
                 return "远程推送";
         }
+    }
+
+    private String layoutSummary() {
+        if (pureMode) {
+            return "纯净";
+        }
+        return "标准 · " + clockPositionLabel(clockPosition);
+    }
+
+    private String clockPositionLabel(String position) {
+        switch (position) {
+            case "top":
+                return "上";
+            case "right":
+                return "右";
+            case "bottom":
+                return "下";
+            case "left":
+            default:
+                return "左";
+        }
+    }
+
+    private void showLayoutDialog() {
+        Context context = getContext();
+        LinearLayout root = new LinearLayout(context);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding((int) dp(24), (int) dp(8), (int) dp(24), 0);
+
+        CheckBox pure = new CheckBox(context);
+        pure.setText("纯净模式");
+        pure.setTextSize(16);
+        pure.setTextColor(COLOR_CREAM);
+        pure.setChecked(pureMode);
+        root.addView(pure);
+
+        TextView pureHint = new TextView(context);
+        pureHint.setText("只保留全屏应用宫格，隐藏时钟和文案");
+        pureHint.setTextSize(12);
+        pureHint.setTextColor(0xFF858B94);
+        pureHint.setPadding((int) dp(32), 0, 0, (int) dp(10));
+        root.addView(pureHint);
+
+        CheckBox tagline = new CheckBox(context);
+        tagline.setText("显示桌面提示文案");
+        tagline.setTextSize(15);
+        tagline.setTextColor(COLOR_CREAM);
+        tagline.setChecked(showTagline);
+        root.addView(tagline);
+
+        TextView positionLabel = new TextView(context);
+        positionLabel.setText("时间位置");
+        positionLabel.setTextSize(12);
+        positionLabel.setTextColor(0xFF858B94);
+        positionLabel.setPadding(0, (int) dp(12), 0, (int) dp(4));
+        root.addView(positionLabel);
+
+        RadioGroup positions = new RadioGroup(context);
+        positions.setOrientation(RadioGroup.HORIZONTAL);
+        String[] values = {"left", "top", "right", "bottom"};
+        String[] labels = {"左", "上", "右", "下"};
+        int[] ids = new int[values.length];
+        for (int i = 0; i < values.length; i++) {
+            RadioButton button = new RadioButton(context);
+            button.setText(labels[i]);
+            button.setTextSize(15);
+            button.setTextColor(COLOR_CREAM);
+            button.setId(View.generateViewId());
+            ids[i] = button.getId();
+            RadioGroup.LayoutParams params = new RadioGroup.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            positions.addView(button, params);
+            if (values[i].equals(clockPosition)) {
+                positions.check(button.getId());
+            }
+        }
+        root.addView(positions);
+
+        Runnable updateEnabled = () -> {
+            boolean enabled = !pure.isChecked();
+            tagline.setEnabled(enabled);
+            tagline.setAlpha(enabled ? 1f : 0.35f);
+            positionLabel.setEnabled(enabled);
+            positionLabel.setAlpha(enabled ? 1f : 0.35f);
+            positions.setEnabled(enabled);
+            for (int i = 0; i < positions.getChildCount(); i++) {
+                View child = positions.getChildAt(i);
+                child.setEnabled(enabled);
+                child.setAlpha(enabled ? 1f : 0.35f);
+            }
+        };
+        pure.setOnCheckedChangeListener((buttonView, isChecked) -> updateEnabled.run());
+        updateEnabled.run();
+
+        AlertDialog dialog = new AlertDialog.Builder(context,
+                android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("布局设置")
+                .setView(root)
+                .setPositiveButton("保存", (d, which) -> {
+                    String position = "left";
+                    for (int i = 0; i < ids.length; i++) {
+                        if (positions.getCheckedRadioButtonId() == ids[i]) {
+                            position = values[i];
+                            break;
+                        }
+                    }
+                    pureMode = pure.isChecked();
+                    showTagline = tagline.isChecked();
+                    clockPosition = position;
+                    layoutPrefs.edit()
+                            .putBoolean(LAYOUT_PURE, pureMode)
+                            .putBoolean(LAYOUT_TAGLINE, showTagline)
+                            .putString(LAYOUT_CLOCK, clockPosition)
+                            .apply();
+                    closeSettings(false);
+                    applyLayoutChange();
+                    Toast.makeText(getContext(), "布局已更新", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .create();
+        dialog.setOnShowListener(d -> pure.requestFocus());
+        dialog.show();
+    }
+
+    private void applyLayoutChange() {
+        String previousKey = null;
+        if (focusedIndex >= 0 && focusedIndex < apps.size()) {
+            previousKey = apps.get(focusedIndex).key();
+        }
+        computeLayout();
+        focusProgress = new float[apps.size()];
+        cancelFocusAnimations();
+        focusAnimators = new ValueAnimator[apps.size()];
+        int next = 0;
+        if (previousKey != null) {
+            for (int i = 0; i < apps.size(); i++) {
+                if (previousKey.equals(apps.get(i).key())) {
+                    next = i;
+                    break;
+                }
+            }
+        }
+        focusedIndex = apps.isEmpty() ? -1 : next;
+        scroll = 0f;
+        targetScroll = 0f;
+        if (focusedIndex >= 0) {
+            focusProgress[focusedIndex] = 1f;
+            ensureVisible(focusedIndex, false);
+        }
+        invalidate();
     }
 
     private void refreshScreenTimeoutSummary() {
@@ -658,9 +828,13 @@ final class LauncherView extends View {
     }
 
     private void executeSettingsAction() {
-        if (settingsIndex == 5) {
+        if (settingsIndex == 6) {
             closeSettings(false);
             openPush();
+            return;
+        }
+        if (settingsIndex == 5) {
+            showLayoutDialog();
             return;
         }
         if (settingsIndex == 4) {
@@ -780,8 +954,9 @@ final class LauncherView extends View {
             textPaint.setTextAlign(Paint.Align.RIGHT);
             textPaint.setTypeface(typeRegular);
             textPaint.setLetterSpacing(0f);
-            if (i == 4) {
-                drawText(canvas, screenTimeoutSummary, right - dp(40),
+            if (i == 4 || i == 5) {
+                String value = i == 4 ? screenTimeoutSummary : layoutSummary();
+                drawText(canvas, value, right - dp(40),
                         rowTop + dp(25) + sp(4.5f), sp(8),
                         selected ? 0xFF55575A : 0xFF7A8089);
             }
@@ -793,7 +968,7 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.03f);
         drawText(canvas, "开发者选项被隐藏时，先到「关于设备」连点版本号。",
-                left + dp(22), top + dp(392), sp(7.5f), 0xFF6A7079);
+                left + dp(22), top + dp(442), sp(7.5f), 0xFF6A7079);
         canvas.restore();
     }
 
@@ -1416,19 +1591,56 @@ final class LauncherView extends View {
 
         padH = w * 0.0542f;
         padTop = h * 0.0704f;
-        leftWidth = w * 0.2625f;
-        dividerX = padH + leftWidth + dp(20);
-        gridLeft = dividerX + dp(32);
-        gridRight = w - padH;
-        gridTop = h * 0.1704f;
-        gridBottom = h - dp(52);
-        gridHeight = Math.max(dp(120), gridBottom - gridTop);
         gapX = dp(12);
         gapY = dp(12);
 
-        int count = apps.size();
-        columns = count <= 4 ? 2 : 3;
-        visibleRows = columns == 2 ? 2 : 3;
+        if (pureMode) {
+            leftWidth = 0f;
+            dividerX = 0f;
+            gridLeft = padH;
+            gridRight = w - padH;
+            gridTop = h * 0.158f;
+            gridBottom = h - dp(44);
+            columns = 4;
+            visibleRows = 3;
+        } else if ("top".equals(clockPosition)) {
+            leftWidth = w - padH * 2f;
+            dividerX = 0f;
+            gridLeft = padH;
+            gridRight = w - padH;
+            gridTop = h * 0.36f;
+            gridBottom = h - dp(48);
+            columns = 4;
+            visibleRows = 2;
+        } else if ("bottom".equals(clockPosition)) {
+            leftWidth = w - padH * 2f;
+            dividerX = 0f;
+            gridLeft = padH;
+            gridRight = w - padH;
+            gridTop = h * 0.19f;
+            gridBottom = h * 0.62f;
+            columns = 4;
+            visibleRows = 2;
+        } else {
+            leftWidth = w * 0.2625f;
+            if ("right".equals(clockPosition)) {
+                dividerX = w - padH - leftWidth - dp(20);
+                gridLeft = padH;
+                gridRight = dividerX - dp(32);
+            } else {
+                dividerX = padH + leftWidth + dp(20);
+                gridLeft = dividerX + dp(32);
+                gridRight = w - padH;
+            }
+            gridTop = h * 0.1704f;
+            gridBottom = h - dp(52);
+
+            int count = apps.size();
+            columns = count <= 4 ? 2 : 3;
+            visibleRows = columns == 2 ? 2 : 3;
+        }
+
+        gridHeight = Math.max(dp(120), gridBottom - gridTop);
         rowMetrics();
 
         float contentHeight = contentHeight();
@@ -1442,6 +1654,14 @@ final class LauncherView extends View {
             scroll = 0f;
             targetScroll = 0f;
         }
+    }
+
+    private boolean sideClock() {
+        return !"top".equals(clockPosition) && !"bottom".equals(clockPosition);
+    }
+
+    private boolean rightClock() {
+        return "right".equals(clockPosition);
     }
 
     private void rowMetrics() {
@@ -1492,10 +1712,20 @@ final class LauncherView extends View {
         paint.setShader(null);
 
         drawHeader(canvas);
-        drawHero(canvas);
-        drawDivider(canvas);
-        drawApps(canvas);
-        drawFooter(canvas);
+        if (pureMode) {
+            drawApps(canvas);
+        } else if ("top".equals(clockPosition)) {
+            drawHeroTop(canvas);
+            drawApps(canvas);
+        } else if ("bottom".equals(clockPosition)) {
+            drawHeroBottom(canvas);
+            drawApps(canvas);
+        } else {
+            drawHero(canvas);
+            drawDivider(canvas);
+            drawApps(canvas);
+            drawFooter(canvas);
+        }
         drawMenu(canvas);
         drawSettings(canvas);
         drawPush(canvas);
@@ -1557,16 +1787,21 @@ final class LauncherView extends View {
     }
 
     private void drawHero(Canvas canvas) {
-        float x = padH;
+        boolean right = rightClock();
+        float x = right ? getWidth() - padH : padH;
+        float direction = right ? -1f : 1f;
+        Paint.Align align = right ? Paint.Align.RIGHT : Paint.Align.LEFT;
 
         textPaint.setTypeface(typeRegular);
-        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(0.24f);
         textPaint.setColor(COLOR_ACCENT);
-        canvas.drawCircle(x + dp(2), gridTop + dp(51), dp(2), textPaint);
-        drawText(canvas, "现在", x + dp(11), gridTop + dp(55), sp(9), 0xFF7A8089);
+        canvas.drawCircle(x + direction * dp(2), gridTop + dp(51), dp(2), textPaint);
+        drawText(canvas, "现在", x + direction * dp(11), gridTop + dp(55), sp(9),
+                0xFF7A8089);
 
         textPaint.setTypeface(typeLight);
+        textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(-0.035f);
         textPaint.setFontFeatureSettings("tnum");
         float clockSize = sp(84);
@@ -1579,23 +1814,105 @@ final class LauncherView extends View {
         textPaint.setFontFeatureSettings(null);
 
         textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(0.055f);
-        drawText(canvas, dateText, x + dp(2), dp(285), sp(14), COLOR_DATE);
+        drawText(canvas, dateText, x + direction * dp(2), dp(285), sp(14), COLOR_DATE);
 
         textPaint.setTypeface(typeMedium);
         textPaint.setLetterSpacing(0.04f);
-        drawText(canvas, greeting, x + dp(2), dp(322), sp(17), 0xFFE7E2D8);
+        drawText(canvas, greeting, x + direction * dp(2), dp(322), sp(17), 0xFFE7E2D8);
 
         textPaint.setStyle(Paint.Style.STROKE);
         textPaint.setStrokeWidth(dp(1));
         textPaint.setShader(dividerShader);
-        canvas.drawLine(x + dp(2), dp(360), x + dp(30), dp(360), textPaint);
+        if (right) {
+            canvas.drawLine(x - dp(2), dp(360), x - dp(30), dp(360), textPaint);
+        } else {
+            canvas.drawLine(x + dp(2), dp(360), x + dp(30), dp(360), textPaint);
+        }
         textPaint.setShader(null);
         textPaint.setStyle(Paint.Style.FILL);
 
+        if (showTagline) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setTextAlign(align);
+            textPaint.setLetterSpacing(0.12f);
+            drawText(canvas, "少一点，刚刚好。", x + direction * dp(2), dp(390), sp(10),
+                    0xFF686E77);
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawHeroTop(Canvas canvas) {
+        float x = padH;
+        textPaint.setTypeface(typeLight);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(-0.035f);
+        textPaint.setFontFeatureSettings("tnum");
+        float clockSize = sp(66);
+        textPaint.setTextSize(clockSize);
+        float clockWidth = textPaint.measureText(timeText);
+        float maxClockWidth = getWidth() * 0.55f;
+        if (clockWidth > maxClockWidth) {
+            clockSize *= maxClockWidth / clockWidth;
+            clockWidth = maxClockWidth;
+        }
+        drawText(canvas, timeText, x, getHeight() * 0.28f, clockSize, COLOR_CREAM);
+        textPaint.setFontFeatureSettings(null);
+
+        float infoX = x + clockWidth + dp(28);
         textPaint.setTypeface(typeRegular);
-        textPaint.setLetterSpacing(0.12f);
-        drawText(canvas, "少一点，刚刚好。", x + dp(2), dp(390), sp(10), 0xFF686E77);
+        textPaint.setLetterSpacing(0.055f);
+        drawText(canvas, dateText, infoX, getHeight() * 0.218f, sp(13), COLOR_DATE);
+        textPaint.setTypeface(typeMedium);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, greeting, infoX, getHeight() * 0.266f, sp(16), 0xFFE7E2D8);
+        if (showTagline) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.12f);
+            drawText(canvas, "少一点，刚刚好。", infoX, getHeight() * 0.315f, sp(9),
+                    0xFF686E77);
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private void drawHeroBottom(Canvas canvas) {
+        float x = padH;
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.24f);
+        textPaint.setColor(COLOR_ACCENT);
+        canvas.drawCircle(x + dp(2), getHeight() * 0.70f, dp(2), textPaint);
+        drawText(canvas, "现在", x + dp(11), getHeight() * 0.704f, sp(9), 0xFF7A8089);
+
+        textPaint.setTypeface(typeLight);
+        textPaint.setLetterSpacing(-0.035f);
+        textPaint.setFontFeatureSettings("tnum");
+        float clockSize = sp(66);
+        textPaint.setTextSize(clockSize);
+        float clockWidth = textPaint.measureText(timeText);
+        float maxClockWidth = getWidth() * 0.48f;
+        if (clockWidth > maxClockWidth) {
+            clockSize *= maxClockWidth / clockWidth;
+            clockWidth = maxClockWidth;
+        }
+        drawText(canvas, timeText, x, getHeight() * 0.885f, clockSize, COLOR_CREAM);
+        textPaint.setFontFeatureSettings(null);
+
+        float infoX = x + clockWidth + dp(28);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.055f);
+        drawText(canvas, dateText, infoX, getHeight() * 0.825f, sp(13), COLOR_DATE);
+        textPaint.setTypeface(typeMedium);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, greeting, infoX, getHeight() * 0.875f, sp(16), 0xFFE7E2D8);
+        if (showTagline) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.12f);
+            drawText(canvas, "少一点，刚刚好。", infoX, getHeight() * 0.955f, sp(9),
+                    0xFF686E77);
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
     private void drawDivider(Canvas canvas) {
@@ -1606,27 +1923,29 @@ final class LauncherView extends View {
     }
 
     private void drawApps(Canvas canvas) {
-        textPaint.setTypeface(typeMedium);
-        textPaint.setTextAlign(Paint.Align.LEFT);
-        textPaint.setLetterSpacing(0.12f);
-        drawText(canvas, "应用", gridLeft, gridTop - dp(21), sp(12), 0xFFE9E4DA);
+        if (!pureMode && !"top".equals(clockPosition)) {
+            textPaint.setTypeface(typeMedium);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            textPaint.setLetterSpacing(0.12f);
+            drawText(canvas, "应用", gridLeft, gridTop - dp(21), sp(12), 0xFFE9E4DA);
 
-        textPaint.setTypeface(typeRegular);
-        textPaint.setLetterSpacing(0.28f);
-        float titleWidth = textPaint.measureText("应用");
-        float appsX = gridLeft + titleWidth + dp(8);
-        drawText(canvas, "APPS", appsX, gridTop - dp(21), sp(8), 0xFF5B616A);
-        float appsWidth = textPaint.measureText("APPS");
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.28f);
+            float titleWidth = textPaint.measureText("应用");
+            float appsX = gridLeft + titleWidth + dp(8);
+            drawText(canvas, "APPS", appsX, gridTop - dp(21), sp(8), 0xFF5B616A);
+            float appsWidth = textPaint.measureText("APPS");
 
-        String count = loading && apps.isEmpty() ? "··" :
-                String.format(Locale.CHINA, "%02d", apps.size());
-        textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, count, appsX + appsWidth + dp(10), gridTop - dp(21), sp(8), 0xFF5B616A);
-        textPaint.setTextAlign(Paint.Align.LEFT);
+            String count = loading && apps.isEmpty() ? "··" :
+                    String.format(Locale.CHINA, "%02d", apps.size());
+            textPaint.setLetterSpacing(0.08f);
+            drawText(canvas, count, appsX + appsWidth + dp(10), gridTop - dp(21), sp(8), 0xFF5B616A);
+            textPaint.setTextAlign(Paint.Align.LEFT);
 
-        paint.setStyle(Paint.Style.FILL);
-        paint.setColor(COLOR_HAIRLINE);
-        canvas.drawRect(gridLeft, gridTop - dp(9), gridRight, gridTop - dp(8.2f), paint);
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(COLOR_HAIRLINE);
+            canvas.drawRect(gridLeft, gridTop - dp(9), gridRight, gridTop - dp(8.2f), paint);
+        }
 
         if (loading && apps.isEmpty()) {
             textPaint.setTypeface(typeRegular);
