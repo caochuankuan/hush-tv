@@ -1,10 +1,14 @@
 package com.hush.tv;
 
 import android.animation.ValueAnimator;
+import android.content.BroadcastReceiver;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.pm.PackageInstaller;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -15,6 +19,7 @@ import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -29,6 +34,11 @@ import android.view.View;
 import android.view.animation.DecelerateInterpolator;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collections;
@@ -65,6 +75,7 @@ final class LauncherView extends View {
     private static final int MENU_INFO = 2;
     private static final int MENU_UNINSTALL = 3;
     private static final int MENU_ITEM_COUNT = 4;
+    private static final int SETTINGS_ITEM_COUNT = 5;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final AppRepository repository;
@@ -136,6 +147,27 @@ final class LauncherView extends View {
     private float settingsProgress;
     private ValueAnimator settingsAnimator;
     private final RectF settingsPanel = new RectF();
+    private boolean pushOpen;
+    private String pushUrl = "";
+    private String pushStatus = "";
+    private int pushPercent;
+    private float pushPanelProgress;
+    private ValueAnimator pushAnimator;
+    private RemotePushServer pushServer;
+    private final RectF pushPanel = new RectF();
+    private boolean packageReceiverRegistered;
+    private final Runnable packageReload = () -> {
+        if (attached) {
+            reloadApps();
+        }
+    };
+    private final BroadcastReceiver packageReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            handler.removeCallbacks(packageReload);
+            handler.postDelayed(packageReload, 500L);
+        }
+    };
     private boolean menuOpen;
     private int menuIndex;
     private AppEntry menuTarget;
@@ -191,6 +223,7 @@ final class LauncherView extends View {
 
     void onPause() {
         stopClock();
+        closePush();
     }
 
     void setDefaultHome(boolean isDefaultHome) {
@@ -206,6 +239,7 @@ final class LauncherView extends View {
         super.onAttachedToWindow();
         attached = true;
         startClock();
+        registerPackageReceiver();
         if (apps.isEmpty()) {
             reloadApps();
         }
@@ -216,6 +250,8 @@ final class LauncherView extends View {
     protected void onDetachedFromWindow() {
         attached = false;
         stopClock();
+        closePush();
+        unregisterPackageReceiver();
         super.onDetachedFromWindow();
     }
 
@@ -236,6 +272,38 @@ final class LauncherView extends View {
     private void stopClock() {
         clockRunning = false;
         handler.removeCallbacks(clockTick);
+    }
+
+    private void registerPackageReceiver() {
+        if (packageReceiverRegistered) {
+            return;
+        }
+        IntentFilter filter = new IntentFilter();
+        filter.addAction(Intent.ACTION_PACKAGE_ADDED);
+        filter.addAction(Intent.ACTION_PACKAGE_REMOVED);
+        filter.addAction(Intent.ACTION_PACKAGE_CHANGED);
+        filter.addDataScheme("package");
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                getContext().registerReceiver(packageReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                getContext().registerReceiver(packageReceiver, filter);
+            }
+            packageReceiverRegistered = true;
+        } catch (Exception e) {
+            Log.w(TAG, "Cannot register package receiver", e);
+        }
+    }
+
+    private void unregisterPackageReceiver() {
+        if (!packageReceiverRegistered) {
+            return;
+        }
+        packageReceiverRegistered = false;
+        try {
+            getContext().unregisterReceiver(packageReceiver);
+        } catch (Exception ignored) {
+        }
     }
 
     private void reloadApps() {
@@ -460,7 +528,7 @@ final class LauncherView extends View {
 
     private void computeSettingsPanel() {
         float width = dp(360);
-        float height = dp(310);
+        float height = dp(360);
         float left = (getWidth() - width) / 2f;
         float top = (getHeight() - height) / 2f;
         settingsPanel.set(left, top, left + width, top + height);
@@ -475,12 +543,19 @@ final class LauncherView extends View {
             case 2:
                 return "应用管理";
             case 3:
-            default:
                 return "系统设置";
+            case 4:
+            default:
+                return "远程推送";
         }
     }
 
     private void executeSettingsAction() {
+        if (settingsIndex == 4) {
+            closeSettings(false);
+            openPush();
+            return;
+        }
         String action;
         switch (settingsIndex) {
             case 0:
@@ -524,7 +599,7 @@ final class LauncherView extends View {
             return -1;
         }
         int row = (int) ((y - rowsTop) / dp(50));
-        return row >= 0 && row < 4 ? row : -1;
+        return row >= 0 && row < SETTINGS_ITEM_COUNT ? row : -1;
     }
 
     private void drawSettings(Canvas canvas) {
@@ -565,7 +640,7 @@ final class LauncherView extends View {
 
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.12f);
-        drawText(canvas, "ADB / 系统快捷入口", left + dp(22), top + dp(48), sp(8), 0xFF747A83);
+        drawText(canvas, "ADB / 系统 / 推送", left + dp(22), top + dp(48), sp(8), 0xFF747A83);
 
         textPaint.setTextAlign(Paint.Align.RIGHT);
         textPaint.setLetterSpacing(0.14f);
@@ -575,7 +650,7 @@ final class LauncherView extends View {
         paint.setColor(0xFF24272D);
         canvas.drawRect(left + dp(16), top + dp(60), right - dp(16), top + dp(61), paint);
 
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < SETTINGS_ITEM_COUNT; i++) {
             float rowTop = top + dp(70) + i * dp(50);
             boolean selected = i == settingsIndex;
             if (selected) {
@@ -602,7 +677,292 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.03f);
         drawText(canvas, "开发者选项被隐藏时，先到「关于设备」连点版本号。",
-                left + dp(22), top + dp(292), sp(7.5f), 0xFF6A7079);
+                left + dp(22), top + dp(342), sp(7.5f), 0xFF6A7079);
+        canvas.restore();
+    }
+
+    private void openPush() {
+        closeMenu();
+        closeSettings(false);
+        if (!canInstallPackages()) {
+            Toast.makeText(getContext(), "请先允许留白安装未知应用，然后重新打开远程推送",
+                    Toast.LENGTH_LONG).show();
+            launchUnknownSourcesSettings();
+            return;
+        }
+
+        pushOpen = true;
+        pushUrl = "";
+        pushStatus = "正在启动接收服务…";
+        pushPercent = 0;
+        pushPanelProgress = 0f;
+        computePushPanel();
+        if (pushAnimator != null) {
+            pushAnimator.cancel();
+        }
+        pushAnimator = ValueAnimator.ofFloat(0f, 1f);
+        pushAnimator.setDuration(160L);
+        pushAnimator.setInterpolator(new DecelerateInterpolator(2f));
+        pushAnimator.addUpdateListener(animation -> {
+            pushPanelProgress = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        pushAnimator.start();
+
+        pushServer = new RemotePushServer(getContext(), new RemotePushServer.Listener() {
+            @Override
+            public void onReady(String url) {
+                if (!pushOpen) {
+                    return;
+                }
+                pushUrl = url == null ? "" : url;
+                pushStatus = url == null
+                        ? "未检测到局域网 IP，请确认电视已联网"
+                        : "等待手机上传 APK…";
+                invalidate();
+            }
+
+            @Override
+            public void onProgress(int percent) {
+                if (!pushOpen) {
+                    return;
+                }
+                pushPercent = percent;
+                pushStatus = "接收中 " + percent + "%";
+                invalidate();
+            }
+
+            @Override
+            public void onApkReceived(File apk) {
+                if (!pushOpen) {
+                    return;
+                }
+                pushPercent = 100;
+                pushStatus = "已收到 APK，正在准备安装…";
+                invalidate();
+                installPushedApk(apk);
+            }
+
+            @Override
+            public void onError(String message) {
+                if (!pushOpen) {
+                    return;
+                }
+                pushStatus = message;
+                invalidate();
+            }
+        });
+        pushServer.start();
+        invalidate();
+    }
+
+    private void closePush() {
+        if (!pushOpen && pushServer == null) {
+            return;
+        }
+        pushOpen = false;
+        pushPercent = 0;
+        pushUrl = "";
+        pushStatus = "";
+        pushPanelProgress = 0f;
+        if (pushAnimator != null) {
+            pushAnimator.cancel();
+            pushAnimator = null;
+        }
+        if (pushServer != null) {
+            pushServer.stop();
+            pushServer = null;
+        }
+        invalidate();
+    }
+
+    private void computePushPanel() {
+        float width = dp(460);
+        float height = dp(330);
+        float left = (getWidth() - width) / 2f;
+        float top = (getHeight() - height) / 2f;
+        pushPanel.set(left, top, left + width, top + height);
+    }
+
+    private boolean canInstallPackages() {
+        return Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                || getContext().getPackageManager().canRequestPackageInstalls();
+    }
+
+    private void launchUnknownSourcesSettings() {
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getContext().getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+            return;
+        } catch (Exception ignored) {
+            // Fall through to the general security settings page.
+        }
+        try {
+            Intent intent = new Intent(Settings.ACTION_SECURITY_SETTINGS);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            getContext().startActivity(intent);
+        } catch (Exception e) {
+            Toast.makeText(getContext(), "请在系统设置中允许安装未知应用", Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void installPushedApk(File apk) {
+        if (!canInstallPackages()) {
+            pushStatus = "需要允许安装未知应用";
+            invalidate();
+            launchUnknownSourcesSettings();
+            return;
+        }
+
+        PackageInstaller.Session session = null;
+        try {
+            PackageInstaller installer = getContext().getPackageManager().getPackageInstaller();
+            PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
+                    PackageInstaller.SessionParams.MODE_FULL_INSTALL);
+            int sessionId = installer.createSession(params);
+            session = installer.openSession(sessionId);
+            try (InputStream input = new FileInputStream(apk);
+                 OutputStream output = session.openWrite("base.apk", 0, apk.length())) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+                output.flush();
+                session.fsync(output);
+            }
+
+            Intent resultIntent = new Intent(getContext(), PushInstallReceiver.class)
+                    .setAction(PushInstallReceiver.ACTION_INSTALL_RESULT);
+            int flags = PendingIntent.FLAG_UPDATE_CURRENT;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                flags |= PendingIntent.FLAG_MUTABLE;
+            }
+            PendingIntent pendingIntent = PendingIntent.getBroadcast(
+                    getContext(), sessionId, resultIntent, flags);
+            session.commit(pendingIntent.getIntentSender());
+            Log.i(TAG, "PackageInstaller commit session=" + sessionId);
+
+            refreshPending = true;
+            pushPercent = 100;
+            pushStatus = "安装请求已发送，请在电视上确认";
+            invalidate();
+        } catch (Exception e) {
+            Log.w(TAG, "Cannot install pushed APK", e);
+            pushStatus = "安装请求失败，请检查安装权限后重试";
+            Toast.makeText(getContext(), "无法发起安装，请允许安装未知应用", Toast.LENGTH_LONG).show();
+            invalidate();
+            if (session != null) {
+                try {
+                    session.abandon();
+                } catch (Exception ignored) {
+                }
+            }
+        } finally {
+            if (session != null) {
+                try {
+                    session.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
+    }
+
+    private void drawPush(Canvas canvas) {
+        if (!pushOpen || pushPanelProgress <= 0f) {
+            return;
+        }
+        computePushPanel();
+        float progress = Math.max(0f, Math.min(1f, pushPanelProgress));
+        float left = pushPanel.left;
+        float top = pushPanel.top;
+        float right = pushPanel.right;
+        float bottom = pushPanel.bottom;
+        float radius = dp(18);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb((int) (172 * progress), 0, 0, 0));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+
+        canvas.save();
+        float scale = 0.965f + 0.035f * progress;
+        canvas.scale(scale, scale, pushPanel.centerX(), pushPanel.centerY());
+
+        paint.setColor(0x22FFFFFF);
+        rect.set(left - dp(2), top - dp(2), right + dp(2), bottom + dp(2));
+        canvas.drawRoundRect(rect, radius + dp(2), radius + dp(2), paint);
+        paint.setColor(0xFF14161A);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.03f);
+        drawText(canvas, "远程推送", left + dp(24), top + dp(32), sp(17), COLOR_CREAM);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "局域网 APK 安装", left + dp(24), top + dp(50), sp(8), 0xFF747A83);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.14f);
+        drawText(canvas, "BACK 停止", right - dp(18), top + dp(26), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(62), right - dp(16), top + dp(63), paint);
+
+        rect.set(left + dp(24), top + dp(76), right - dp(24), top + dp(112));
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xFF0B0C0F);
+        canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(0.8f));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(Typeface.MONOSPACE);
+        textPaint.setLetterSpacing(0f);
+        if (pushUrl.isEmpty()) {
+            drawText(canvas, "正在获取电视地址…", left + dp(38), top + dp(99), sp(13), 0xFF777D86);
+        } else {
+            drawText(canvas, pushUrl, left + dp(38), top + dp(99), sp(15), COLOR_ACCENT);
+        }
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, pushStatus, left + dp(24), top + dp(136), sp(10), 0xFFC9C5BC);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(24), top + dp(146), right - dp(24), top + dp(149), paint);
+        if (pushPercent > 0) {
+            paint.setColor(COLOR_ACCENT);
+            canvas.drawRect(left + dp(24), top + dp(146),
+                    left + dp(24) + (right - left - dp(48)) * pushPercent / 100f,
+                    top + dp(149), paint);
+        }
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.03f);
+        drawText(canvas, "1  手机和电视连接同一个 Wi-Fi", left + dp(24), top + dp(180), sp(9), 0xFF8B919A);
+        drawText(canvas, "2  手机浏览器打开上面的地址", left + dp(24), top + dp(203), sp(9), 0xFF8B919A);
+        drawText(canvas, "3  选择 APK 上传，电视端确认安装", left + dp(24), top + dp(226), sp(9), 0xFF8B919A);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(264), right - dp(16), top + dp(265), paint);
+
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "BACK  停止并返回", left + dp(24), top + dp(294), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        drawText(canvas, "同一局域网 · 无需数据线", right - dp(24), top + dp(294), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
         canvas.restore();
     }
 
@@ -802,6 +1162,7 @@ final class LauncherView extends View {
         drawFooter(canvas);
         drawMenu(canvas);
         drawSettings(canvas);
+        drawPush(canvas);
     }
 
     private void drawHeader(Canvas canvas) {
@@ -1368,14 +1729,21 @@ final class LauncherView extends View {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (pushOpen) {
+            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) {
+                closePush();
+            }
+            return true;
+        }
+
         if (settingsOpen) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:
-                    settingsIndex = (settingsIndex + 3) % 4;
+                    settingsIndex = (settingsIndex + SETTINGS_ITEM_COUNT - 1) % SETTINGS_ITEM_COUNT;
                     invalidate();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_DOWN:
-                    settingsIndex = (settingsIndex + 1) % 4;
+                    settingsIndex = (settingsIndex + 1) % SETTINGS_ITEM_COUNT;
                     invalidate();
                     return true;
                 case KeyEvent.KEYCODE_DPAD_CENTER:
@@ -1505,7 +1873,7 @@ final class LauncherView extends View {
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            if (settingsOpen) {
+            if (settingsOpen || pushOpen) {
                 return true;
             }
             closeMenu();
@@ -1520,6 +1888,12 @@ final class LauncherView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
+        if (pushOpen) {
+            if (action == MotionEvent.ACTION_UP && !pushPanel.contains(event.getX(), event.getY())) {
+                closePush();
+            }
+            return true;
+        }
         if (settingsOpen) {
             if (action == MotionEvent.ACTION_UP) {
                 int row = settingsRowAt(event.getX(), event.getY());
