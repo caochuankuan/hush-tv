@@ -65,19 +65,19 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".InstallProxyActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:theme="@style/Theme.InstallProxy" />
+
         <provider
             android:name=".PushFileProvider"
             android:authorities="com.hush.tv.pushfiles"
             android:exported="false"
             android:grantUriPermissions="true" />
 
-        <receiver
-            android:name=".PushInstallReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.hush.tv.action.PUSH_INSTALL_RESULT" />
-            </intent-filter>
-        </receiver>
     </application>
 
 </manifest>

@@ -966,13 +966,12 @@ final class LauncherView extends View {
                 session.fsync(output);
             }
 
-            Intent resultIntent = new Intent(getContext(), PushInstallReceiver.class)
-                    .setAction(PushInstallReceiver.ACTION_INSTALL_RESULT);
+            Intent resultIntent = new Intent(getContext(), InstallProxyActivity.class);
             int flags = PendingIntent.FLAG_UPDATE_CURRENT;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                 flags |= PendingIntent.FLAG_MUTABLE;
             }
-            PendingIntent pendingIntent = PendingIntent.getBroadcast(
+            PendingIntent pendingIntent = PendingIntent.getActivity(
                     getContext(), sessionId, resultIntent, flags);
             session.commit(pendingIntent.getIntentSender());
             Log.i(TAG, "PackageInstaller commit session=" + sessionId);
