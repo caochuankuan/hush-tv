@@ -1,6 +1,7 @@
 package com.hush.tv;
 
 import android.animation.ValueAnimator;
+import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
 import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
@@ -40,6 +41,7 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
@@ -150,7 +152,11 @@ final class LauncherView extends View {
     private boolean pushOpen;
     private String pushUrl = "";
     private String pushStatus = "";
+    private String pushDirPath = "";
     private int pushPercent;
+    private final List<File> pushFiles = new ArrayList<>();
+    private int pushSelected = -1;
+    private int pushListScroll;
     private float pushPanelProgress;
     private ValueAnimator pushAnimator;
     private RemotePushServer pushServer;
@@ -695,6 +701,10 @@ final class LauncherView extends View {
         pushUrl = "";
         pushStatus = "正在启动接收服务…";
         pushPercent = 0;
+        pushSelected = -1;
+        pushListScroll = 0;
+        pushDirPath = RemotePushServer.getPushDir(getContext()).getAbsolutePath();
+        refreshPushFiles(null);
         pushPanelProgress = 0f;
         computePushPanel();
         if (pushAnimator != null) {
@@ -711,14 +721,16 @@ final class LauncherView extends View {
 
         pushServer = new RemotePushServer(getContext(), new RemotePushServer.Listener() {
             @Override
-            public void onReady(String url) {
+            public void onReady(String url, String directory) {
                 if (!pushOpen) {
                     return;
                 }
                 pushUrl = url == null ? "" : url;
+                pushDirPath = directory;
                 pushStatus = url == null
                         ? "未检测到局域网 IP，请确认电视已联网"
-                        : "等待手机上传 APK…";
+                        : "等待手机上传文件…";
+                refreshPushFiles(null);
                 invalidate();
             }
 
@@ -733,14 +745,18 @@ final class LauncherView extends View {
             }
 
             @Override
-            public void onApkReceived(File apk) {
+            public void onFileReceived(File file) {
                 if (!pushOpen) {
                     return;
                 }
                 pushPercent = 100;
-                pushStatus = "已收到 APK，正在准备安装…";
-                invalidate();
-                installPushedApk(apk);
+                pushStatus = "已收到 " + file.getName();
+                refreshPushFiles(file.getName());
+                if (isApkFile(file)) {
+                    pushStatus = "已收到 APK，正在准备安装…";
+                    invalidate();
+                    installPushedApk(file);
+                }
             }
 
             @Override
@@ -764,6 +780,9 @@ final class LauncherView extends View {
         pushPercent = 0;
         pushUrl = "";
         pushStatus = "";
+        pushSelected = -1;
+        pushListScroll = 0;
+        pushFiles.clear();
         pushPanelProgress = 0f;
         if (pushAnimator != null) {
             pushAnimator.cancel();
@@ -777,11 +796,124 @@ final class LauncherView extends View {
     }
 
     private void computePushPanel() {
-        float width = dp(460);
-        float height = dp(330);
+        float width = dp(540);
+        float height = dp(430);
         float left = (getWidth() - width) / 2f;
         float top = (getHeight() - height) / 2f;
         pushPanel.set(left, top, left + width, top + height);
+    }
+
+    private void refreshPushFiles(String selectName) {
+        File dir = RemotePushServer.getPushDir(getContext());
+        pushDirPath = dir.getAbsolutePath();
+        File[] files = dir.listFiles();
+        pushFiles.clear();
+        if (files != null) {
+            Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (File file : files) {
+                if (file.isFile()) {
+                    pushFiles.add(file);
+                }
+            }
+        }
+        if (selectName != null) {
+            for (int i = 0; i < pushFiles.size(); i++) {
+                if (selectName.equals(pushFiles.get(i).getName())) {
+                    pushSelected = i;
+                    break;
+                }
+            }
+        }
+        if (pushFiles.isEmpty()) {
+            pushSelected = -1;
+            pushListScroll = 0;
+        } else {
+            if (pushSelected < 0 || pushSelected >= pushFiles.size()) {
+                pushSelected = 0;
+            }
+            adjustPushScroll();
+        }
+        invalidate();
+    }
+
+    private void adjustPushScroll() {
+        int visible = 5;
+        if (pushSelected < pushListScroll) {
+            pushListScroll = pushSelected;
+        } else if (pushSelected >= pushListScroll + visible) {
+            pushListScroll = pushSelected - visible + 1;
+        }
+        int maxScroll = Math.max(0, pushFiles.size() - visible);
+        pushListScroll = Math.max(0, Math.min(maxScroll, pushListScroll));
+    }
+
+    private boolean isApkFile(File file) {
+        return file != null && file.getName().toLowerCase(Locale.US).endsWith(".apk");
+    }
+
+    private void openSelectedPushFile() {
+        if (pushSelected < 0 || pushSelected >= pushFiles.size()) {
+            return;
+        }
+        File file = pushFiles.get(pushSelected);
+        if (isApkFile(file)) {
+            installPushedApk(file);
+            return;
+        }
+        Uri uri = PushFileProvider.uriFor(file);
+        String mime = getContext().getContentResolver().getType(uri);
+        Intent intent = new Intent(Intent.ACTION_VIEW)
+                .setDataAndType(uri, mime == null ? "application/octet-stream" : mime)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try {
+            getContext().startActivity(intent);
+        } catch (Exception e) {
+            Log.w(TAG, "No viewer for " + file.getName(), e);
+            Toast.makeText(getContext(), "没有可打开这个文件的应用", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void confirmDeletePushFile() {
+        if (pushSelected < 0 || pushSelected >= pushFiles.size()) {
+            return;
+        }
+        File file = pushFiles.get(pushSelected);
+        new AlertDialog.Builder(getContext(), android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("删除文件")
+                .setMessage("确定删除 " + file.getName() + "？")
+                .setPositiveButton("删除", (dialog, which) -> {
+                    if (file.delete()) {
+                        pushStatus = "已删除 " + file.getName();
+                        refreshPushFiles(null);
+                    } else {
+                        Toast.makeText(getContext(), "删除失败", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private int pushRowAt(float x, float y) {
+        if (!pushOpen || !pushPanel.contains(x, y)) {
+            return -1;
+        }
+        float rowsTop = pushPanel.top + dp(200);
+        if (y < rowsTop || y > rowsTop + 5 * dp(38)) {
+            return -1;
+        }
+        int row = (int) ((y - rowsTop) / dp(38));
+        int index = pushListScroll + row;
+        return index >= 0 && index < pushFiles.size() ? index : -1;
+    }
+
+    private String formatFileSize(long bytes) {
+        if (bytes < 1024) {
+            return bytes + " B";
+        }
+        if (bytes < 1024L * 1024L) {
+            return String.format(Locale.CHINA, "%.1f KB", bytes / 1024f);
+        }
+        return String.format(Locale.CHINA, "%.1f MB", bytes / (1024f * 1024f));
     }
 
     private boolean canInstallPackages() {
@@ -907,8 +1039,8 @@ final class LauncherView extends View {
         drawText(canvas, "远程推送", left + dp(24), top + dp(32), sp(17), COLOR_CREAM);
 
         textPaint.setTypeface(typeRegular);
-        textPaint.setLetterSpacing(0.12f);
-        drawText(canvas, "局域网 APK 安装", left + dp(24), top + dp(50), sp(8), 0xFF747A83);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "手机浏览器打开地址上传", left + dp(24), top + dp(50), sp(8), 0xFF747A83);
 
         textPaint.setTextAlign(Paint.Align.RIGHT);
         textPaint.setLetterSpacing(0.14f);
@@ -938,7 +1070,11 @@ final class LauncherView extends View {
 
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.04f);
-        drawText(canvas, pushStatus, left + dp(24), top + dp(136), sp(10), 0xFFC9C5BC);
+        measurePaint.setTypeface(typeRegular);
+        measurePaint.setTextSize(sp(10));
+        CharSequence status = TextUtils.ellipsize(pushStatus, measurePaint,
+                right - left - dp(48), TextUtils.TruncateAt.END);
+        drawText(canvas, status.toString(), left + dp(24), top + dp(136), sp(10), 0xFFC9C5BC);
 
         paint.setColor(0xFF24272D);
         canvas.drawRect(left + dp(24), top + dp(146), right - dp(24), top + dp(149), paint);
@@ -950,18 +1086,85 @@ final class LauncherView extends View {
         }
 
         textPaint.setTypeface(typeRegular);
-        textPaint.setLetterSpacing(0.03f);
-        drawText(canvas, "1  手机和电视连接同一个 Wi-Fi", left + dp(24), top + dp(180), sp(9), 0xFF8B919A);
-        drawText(canvas, "2  手机浏览器打开上面的地址", left + dp(24), top + dp(203), sp(9), 0xFF8B919A);
-        drawText(canvas, "3  选择 APK 上传，电视端确认安装", left + dp(24), top + dp(226), sp(9), 0xFF8B919A);
+        textPaint.setLetterSpacing(0.02f);
+        textPaint.setTextSize(sp(7.5f));
+        drawText(canvas, "保存到", left + dp(24), top + dp(166), sp(7.5f), 0xFF5E646D);
+        float saveLabelWidth = textPaint.measureText("保存到  ");
+        measurePaint.setTypeface(typeRegular);
+        measurePaint.setTextSize(sp(7.5f));
+        measurePaint.setLetterSpacing(0.02f);
+        CharSequence path = TextUtils.ellipsize(pushDirPath, measurePaint,
+                right - left - dp(48) - saveLabelWidth, TextUtils.TruncateAt.START);
+        drawText(canvas, path.toString(), left + dp(24) + saveLabelWidth, top + dp(166),
+                sp(7.5f), 0xFF9A8F80);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setLetterSpacing(0.06f);
+        drawText(canvas, "已接收文件", left + dp(24), top + dp(190), sp(9), 0xFFE1DCD2);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, pushFiles.size() + " 个  ·  OK 打开  ·  MENU 删除",
+                right - dp(24), top + dp(190), sp(7), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        float rowsTop = top + dp(200);
+        float rowHeight = dp(38);
+        if (pushFiles.isEmpty()) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.03f);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            drawText(canvas, "还没有收到文件", left + (right - left) / 2f,
+                    rowsTop + dp(76), sp(11), 0xFF777D86);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+        } else {
+            for (int i = 0; i < 5; i++) {
+                int index = pushListScroll + i;
+                if (index >= pushFiles.size()) {
+                    break;
+                }
+                File file = pushFiles.get(index);
+                float rowTop = rowsTop + i * rowHeight;
+                boolean selected = index == pushSelected;
+                if (selected) {
+                    rect.set(left + dp(16), rowTop + dp(2), right - dp(16), rowTop + dp(36));
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(COLOR_CARD_FOCUS);
+                    canvas.drawRoundRect(rect, dp(9), dp(9), paint);
+                }
+                int color = selected ? COLOR_INK : 0xFFD2CDC3;
+                int metaColor = selected ? 0xFF55575A : 0xFF6F757E;
+                measurePaint.setTypeface(selected ? typeMedium : typeRegular);
+                measurePaint.setTextSize(sp(10.5f));
+                measurePaint.setLetterSpacing(0.03f);
+                CharSequence name = TextUtils.ellipsize(file.getName(), measurePaint,
+                        right - left - dp(190), TextUtils.TruncateAt.MIDDLE);
+                textPaint.setTypeface(selected ? typeMedium : typeRegular);
+                textPaint.setTextAlign(Paint.Align.LEFT);
+                textPaint.setLetterSpacing(0.03f);
+                drawText(canvas, name.toString(), left + dp(28), rowTop + dp(23),
+                        sp(10.5f), color);
+                textPaint.setTypeface(typeRegular);
+                textPaint.setTextAlign(Paint.Align.RIGHT);
+                textPaint.setLetterSpacing(0.02f);
+                String size = formatFileSize(file.length());
+                if (isApkFile(file)) {
+                    size = "APK  ·  " + size;
+                }
+                drawText(canvas, size, right - dp(28), rowTop + dp(23), sp(8), metaColor);
+            }
+        }
+        textPaint.setTextAlign(Paint.Align.LEFT);
 
         paint.setColor(0xFF24272D);
-        canvas.drawRect(left + dp(16), top + dp(264), right - dp(16), top + dp(265), paint);
+        canvas.drawRect(left + dp(16), top + dp(400), right - dp(16), top + dp(401), paint);
 
+        textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.12f);
-        drawText(canvas, "BACK  停止并返回", left + dp(24), top + dp(294), sp(8), 0xFF5E646D);
+        drawText(canvas, "BACK  停止并返回", left + dp(24), top + dp(417), sp(8), 0xFF5E646D);
         textPaint.setTextAlign(Paint.Align.RIGHT);
-        drawText(canvas, "同一局域网 · 无需数据线", right - dp(24), top + dp(294), sp(8), 0xFF5E646D);
+        drawText(canvas, "同一局域网 · 无需数据线", right - dp(24), top + dp(417),
+                sp(8), 0xFF5E646D);
         textPaint.setTextAlign(Paint.Align.LEFT);
         canvas.restore();
     }
@@ -1730,10 +1933,37 @@ final class LauncherView extends View {
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if (pushOpen) {
-            if (keyCode == KeyEvent.KEYCODE_BACK || keyCode == KeyEvent.KEYCODE_MENU) {
-                closePush();
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (pushSelected > 0) {
+                        pushSelected--;
+                        adjustPushScroll();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (pushSelected >= 0 && pushSelected < pushFiles.size() - 1) {
+                        pushSelected++;
+                        adjustPushScroll();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                case KeyEvent.KEYCODE_BUTTON_A:
+                case KeyEvent.KEYCODE_SPACE:
+                    openSelectedPushFile();
+                    return true;
+                case KeyEvent.KEYCODE_MENU:
+                    confirmDeletePushFile();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                    closePush();
+                    return true;
+                default:
+                    return true;
             }
-            return true;
         }
 
         if (settingsOpen) {
@@ -1889,8 +2119,14 @@ final class LauncherView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
         if (pushOpen) {
-            if (action == MotionEvent.ACTION_UP && !pushPanel.contains(event.getX(), event.getY())) {
-                closePush();
+            if (action == MotionEvent.ACTION_UP) {
+                int row = pushRowAt(event.getX(), event.getY());
+                if (row >= 0) {
+                    pushSelected = row;
+                    openSelectedPushFile();
+                } else if (!pushPanel.contains(event.getX(), event.getY())) {
+                    closePush();
+                }
             }
             return true;
         }

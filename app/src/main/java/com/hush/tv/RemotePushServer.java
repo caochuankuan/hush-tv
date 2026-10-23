@@ -1,6 +1,7 @@
 package com.hush.tv;
 
 import android.content.Context;
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
@@ -30,19 +31,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * A tiny LAN-only HTTP receiver for APK uploads.
+ * A small LAN-only HTTP receiver for phone/computer uploads.
  *
- * The phone browser posts the raw APK body to /upload?name=foo.apk. Keeping the
- * protocol this small avoids pulling in a web server or multipart parser.
+ * The browser posts the raw file body to /upload?name=foo.ext; keeping the
+ * protocol this small avoids a multipart parser or a bundled web server.
  */
 final class RemotePushServer {
 
     interface Listener {
-        void onReady(String url);
+        void onReady(String url, String directory);
 
         void onProgress(int percent);
 
-        void onApkReceived(File apk);
+        void onFileReceived(File file);
 
         void onError(String message);
     }
@@ -65,6 +66,18 @@ final class RemotePushServer {
     RemotePushServer(Context context, Listener listener) {
         this.context = context.getApplicationContext();
         this.listener = listener;
+    }
+
+    static File getPushDir(Context context) {
+        File base = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (base == null) {
+            base = new File(context.getFilesDir(), "downloads");
+        }
+        File dir = new File(base, "HUSH");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
     }
 
     void start() {
@@ -91,7 +104,6 @@ final class RemotePushServer {
         }
 
         running = true;
-        cleanupOldUploads();
         String ip = findLocalIpv4();
         url = ip == null ? null : "http://" + ip + ":" + serverSocket.getLocalPort();
         postReady();
@@ -205,22 +217,18 @@ final class RemotePushServer {
                 return;
             }
             if (contentLength > MAX_UPLOAD_BYTES) {
-                sendText(output, 413, "APK 太大（上限 300 MB）");
+                sendText(output, 413, "文件太大（上限 300 MB）");
                 return;
             }
 
-            String fileName = queryParam(path, "name");
-            if (fileName == null || !fileName.toLowerCase(Locale.US).endsWith(".apk")) {
-                sendText(output, 400, "只支持 APK 文件");
+            String requestedName = queryParam(path, "name");
+            if (requestedName == null || requestedName.trim().isEmpty()) {
+                sendText(output, 400, "缺少文件名");
                 return;
             }
-
-            File dir = new File(context.getCacheDir(), "push");
-            if (!dir.exists() && !dir.mkdirs()) {
-                sendText(output, 500, "无法创建缓存目录");
-                return;
-            }
-            File target = new File(dir, "upload-" + System.currentTimeMillis() + ".apk");
+            String safeName = sanitizeName(requestedName);
+            boolean apk = safeName.toLowerCase(Locale.US).endsWith(".apk");
+            File target = uniqueFile(getPushDir(context), safeName);
             FileOutputStream fileOutput = new FileOutputStream(target);
             long remaining = contentLength;
             long total = contentLength;
@@ -250,29 +258,61 @@ final class RemotePushServer {
                 closeQuietly(fileOutput);
             }
 
-            if (!isApk(target)) {
+            if (apk && !isApk(target)) {
                 target.delete();
                 sendText(output, 400, "不是有效的 APK 文件");
                 return;
             }
 
-            sendText(output, 200, "APK 已收到，正在发送安装请求。请在电视上确认安装。");
-            postReceived(target);
+            String result = "已收到：" + target.getName() + "\n"
+                    + "保存到：" + target.getAbsolutePath() + "\n"
+                    + (apk ? "正在请求安装，请在电视上确认。" : "文件已保存到电视。");
+            sendText(output, 200, result);
+            postFile(target);
         }
     }
 
-    private void cleanupOldUploads() {
-        File dir = new File(context.getCacheDir(), "push");
-        File[] files = dir.listFiles();
-        if (files == null) {
-            return;
+    private File uniqueFile(File dir, String name) {
+        if (!dir.exists() && !dir.mkdirs()) {
+            dir = new File(context.getFilesDir(), "HUSH");
+            dir.mkdirs();
         }
-        long cutoff = System.currentTimeMillis() - 24L * 60L * 60L * 1000L;
-        for (File file : files) {
-            if (file.isFile() && file.lastModified() < cutoff) {
-                file.delete();
+        File target = new File(dir, name);
+        if (!target.exists()) {
+            return target;
+        }
+        int dot = name.lastIndexOf('.');
+        String base = dot > 0 ? name.substring(0, dot) : name;
+        String ext = dot > 0 ? name.substring(dot) : "";
+        int index = 1;
+        while (target.exists()) {
+            target = new File(dir, base + "-" + index + ext);
+            index++;
+        }
+        return target;
+    }
+
+    private String sanitizeName(String name) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < name.length(); i++) {
+            char c = name.charAt(i);
+            if (c == '\\' || c == '/' || c == ':' || c == '*' || c == '?'
+                    || c == '"' || c == '<' || c == '>' || c == '|' || c < 32) {
+                builder.append('_');
+            } else {
+                builder.append(c);
             }
         }
+        String cleaned = builder.toString().trim();
+        if (cleaned.isEmpty()) {
+            cleaned = "file";
+        }
+        if (cleaned.length() > 80) {
+            int dot = cleaned.lastIndexOf('.');
+            String ext = dot > 0 && cleaned.length() - dot <= 12 ? cleaned.substring(dot) : "";
+            cleaned = cleaned.substring(0, 80 - ext.length()) + ext;
+        }
+        return cleaned;
     }
 
     private boolean isApk(File file) {
@@ -302,36 +342,42 @@ final class RemotePushServer {
     }
 
     private String uploadPage() {
+        String dir = getPushDir(context).getAbsolutePath();
         return "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
                 + "<title>HUSH TV 远程推送</title>"
                 + "<style>"
                 + "*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#08090b;color:#f2eee5;"
                 + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center}"
-                + "main{width:min(520px,92vw);padding:32px}h1{font-size:30px;margin:8px 0 8px;font-weight:500}"
+                + "main{width:min(560px,92vw);padding:32px}h1{font-size:30px;margin:8px 0;font-weight:500}"
                 + ".brand{color:#e7a56a;letter-spacing:.18em;font-size:12px}.sub{color:#8b919a;font-size:14px;line-height:1.6}"
-                + "input[type=file]{display:block;width:100%;margin:28px 0 18px;padding:16px;border:1px solid #2a2d33;"
+                + "input[type=file]{display:block;width:100%;margin:24px 0 16px;padding:16px;border:1px solid #2a2d33;"
                 + "border-radius:14px;background:#121418;color:#c9c5bc;font-size:15px}"
                 + "button{width:100%;padding:16px;border:0;border-radius:14px;background:#f1ede3;color:#0a0b0d;"
                 + "font-size:17px;font-weight:600}button:disabled{opacity:.35}"
-                + "#status{min-height:24px;margin:16px 0;color:#c9c5bc;font-size:14px;line-height:1.5}"
+                + "#status{min-height:24px;margin:16px 0;color:#c9c5bc;font-size:14px;line-height:1.55;white-space:pre-wrap}"
                 + ".bar{height:3px;background:#24272d;border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;width:0;"
-                + "background:#e7a56a;transition:width .2s}.hint{margin-top:22px;color:#5e646d;font-size:12px;line-height:1.7}"
+                + "background:#e7a56a;transition:width .2s}.hint{margin-top:20px;color:#5e646d;font-size:12px;line-height:1.7}"
+                + ".path{color:#9a8f80;word-break:break-all}"
                 + "</style><body><main><div class=\"brand\">HUSH / 留白</div><h1>远程推送</h1>"
-                + "<p class=\"sub\">选择 APK 上传，电视收到后会自动请求安装。</p>"
-                + "<input type=\"file\" id=\"file\" accept=\".apk,application/vnd.android.package-archive\">"
-                + "<button id=\"send\" disabled>上传并安装</button><p id=\"status\"></p>"
-                + "<div class=\"bar\"><i id=\"bar\"></i></div>"
+                + "<p class=\"sub\">选择文件上传。APK 会自动拉起电视安装，其它文件保存到电视。</p>"
+                + "<input type=\"file\" id=\"file\"><button id=\"send\" disabled>上传文件</button>"
+                + "<p id=\"status\"></p><div class=\"bar\"><i id=\"bar\"></i></div>"
+                + "<p class=\"hint\">保存到电视：<span class=\"path\">" + escapeHtml(dir) + "</span></p>"
                 + "<p class=\"hint\">手机和电视需连接同一个 Wi-Fi。上传期间不要关闭电视上的远程推送页面。</p>"
                 + "</main><script>"
                 + "var f=document.getElementById('file'),b=document.getElementById('send'),s=document.getElementById('status'),bar=document.getElementById('bar');"
                 + "f.onchange=function(){b.disabled=!f.files.length};"
-                + "b.onclick=function(){var file=f.files[0];if(!file)return;if(!/\\.apk$/i.test(file.name)){s.textContent='请选择 APK 文件';return;}"
+                + "b.onclick=function(){var file=f.files[0];if(!file)return;"
                 + "b.disabled=true;s.textContent='正在上传…';var x=new XMLHttpRequest();x.open('POST','/upload?name='+encodeURIComponent(file.name));"
                 + "x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded*100/e.total);bar.style.width=p+'%';s.textContent='正在上传 '+p+'%';}};"
-                + "x.onload=function(){s.textContent=x.responseText||'已收到';bar.style.width='100%';};"
+                + "x.onload=function(){s.textContent=x.responseText||'已收到';bar.style.width='100%';b.disabled=false;};"
                 + "x.onerror=function(){s.textContent='网络错误，请重试';b.disabled=false;};x.send(file);};"
                 + "</script></body></html>";
+    }
+
+    private static String escapeHtml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     private static String readLine(InputStream input) throws IOException {
@@ -403,15 +449,16 @@ final class RemotePushServer {
     }
 
     private void postReady() {
-        main.post(() -> listener.onReady(url));
+        String dir = getPushDir(context).getAbsolutePath();
+        main.post(() -> listener.onReady(url, dir));
     }
 
     private void postProgress(int percent) {
         main.post(() -> listener.onProgress(percent));
     }
 
-    private void postReceived(File file) {
-        main.post(() -> listener.onApkReceived(file));
+    private void postFile(File file) {
+        main.post(() -> listener.onFileReceived(file));
     }
 
     private void postError(String message) {
