@@ -54,6 +54,8 @@ final class RemotePushServer {
 
     private final Context context;
     private final Listener listener;
+    private final File uploadDir;
+    private final boolean wallpaperMode;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final Object uploadLock = new Object();
 
@@ -64,8 +66,14 @@ final class RemotePushServer {
     private String url;
 
     RemotePushServer(Context context, Listener listener) {
+        this(context, listener, getPushDir(context), false);
+    }
+
+    RemotePushServer(Context context, Listener listener, File uploadDir, boolean wallpaperMode) {
         this.context = context.getApplicationContext();
         this.listener = listener;
+        this.uploadDir = uploadDir;
+        this.wallpaperMode = wallpaperMode;
     }
 
     static File getPushDir(Context context) {
@@ -74,6 +82,14 @@ final class RemotePushServer {
             base = new File(context.getFilesDir(), "downloads");
         }
         File dir = new File(base, "HUSH");
+        if (!dir.exists()) {
+            dir.mkdirs();
+        }
+        return dir;
+    }
+
+    static File getWallpaperDir(Context context) {
+        File dir = new File(getPushDir(context), "wallpapers");
         if (!dir.exists()) {
             dir.mkdirs();
         }
@@ -228,7 +244,7 @@ final class RemotePushServer {
             }
             String safeName = sanitizeName(requestedName);
             boolean apk = safeName.toLowerCase(Locale.US).endsWith(".apk");
-            File target = uniqueFile(getPushDir(context), safeName);
+            File target = uniqueFile(uploadDir, safeName);
             FileOutputStream fileOutput = new FileOutputStream(target);
             long remaining = contentLength;
             long total = contentLength;
@@ -342,7 +358,10 @@ final class RemotePushServer {
     }
 
     private String uploadPage() {
-        String dir = getPushDir(context).getAbsolutePath();
+        String dir = uploadDir.getAbsolutePath();
+        if (wallpaperMode) {
+            return wallpaperPage(dir);
+        }
         return "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\">"
                 + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
                 + "<title>HUSH TV 远程推送</title>"
@@ -365,6 +384,40 @@ final class RemotePushServer {
                 + "<p id=\"status\"></p><div class=\"bar\"><i id=\"bar\"></i></div>"
                 + "<p class=\"hint\">保存到电视：<span class=\"path\">" + escapeHtml(dir) + "</span></p>"
                 + "<p class=\"hint\">手机和电视需连接同一个 Wi-Fi。上传期间不要关闭电视上的远程推送页面。</p>"
+                + "</main><script>"
+                + "var f=document.getElementById('file'),b=document.getElementById('send'),s=document.getElementById('status'),bar=document.getElementById('bar');"
+                + "f.onchange=function(){b.disabled=!f.files.length};"
+                + "b.onclick=function(){var file=f.files[0];if(!file)return;"
+                + "b.disabled=true;s.textContent='正在上传…';var x=new XMLHttpRequest();x.open('POST','/upload?name='+encodeURIComponent(file.name));"
+                + "x.upload.onprogress=function(e){if(e.lengthComputable){var p=Math.round(e.loaded*100/e.total);bar.style.width=p+'%';s.textContent='正在上传 '+p+'%';}};"
+                + "x.onload=function(){s.textContent=x.responseText||'已收到';bar.style.width='100%';b.disabled=false;};"
+                + "x.onerror=function(){s.textContent='网络错误，请重试';b.disabled=false;};x.send(file);};"
+                + "</script></body></html>";
+    }
+
+    private String wallpaperPage(String dir) {
+        return "<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\">"
+                + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+                + "<title>HUSH TV 壁纸推送</title>"
+                + "<style>"
+                + "*{box-sizing:border-box}body{margin:0;min-height:100vh;background:#08090b;color:#f2eee5;"
+                + "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;display:flex;align-items:center;justify-content:center}"
+                + "main{width:min(560px,92vw);padding:32px}h1{font-size:30px;margin:8px 0;font-weight:500}"
+                + ".brand{color:#e7a56a;letter-spacing:.18em;font-size:12px}.sub{color:#8b919a;font-size:14px;line-height:1.6}"
+                + "input[type=file]{display:block;width:100%;margin:24px 0 16px;padding:16px;border:1px solid #2a2d33;"
+                + "border-radius:14px;background:#121418;color:#c9c5bc;font-size:15px}"
+                + "button{width:100%;padding:16px;border:0;border-radius:14px;background:#f1ede3;color:#0a0b0d;"
+                + "font-size:17px;font-weight:600}button:disabled{opacity:.35}"
+                + "#status{min-height:24px;margin:16px 0;color:#c9c5bc;font-size:14px;line-height:1.55;white-space:pre-wrap}"
+                + ".bar{height:3px;background:#24272d;border-radius:3px;overflow:hidden}.bar i{display:block;height:100%;width:0;"
+                + "background:#e7a56a;transition:width .2s}.hint{margin-top:20px;color:#5e646d;font-size:12px;line-height:1.7}"
+                + ".path{color:#9a8f80;word-break:break-all}"
+                + "</style><body><main><div class=\"brand\">HUSH / 留白</div><h1>壁纸推送</h1>"
+                + "<p class=\"sub\">选择一张图片上传。上传成功后电视会立即把它设为壁纸，并加入壁纸历史。</p>"
+                + "<input type=\"file\" id=\"file\" accept=\"image/*\"><button id=\"send\" disabled>上传图片</button>"
+                + "<p id=\"status\"></p><div class=\"bar\"><i id=\"bar\"></i></div>"
+                + "<p class=\"hint\">保存到电视：<span class=\"path\">" + escapeHtml(dir) + "</span></p>"
+                + "<p class=\"hint\">手机和电视需连接同一个 Wi-Fi。上传期间不要关闭电视上的壁纸设置弹窗。</p>"
                 + "</main><script>"
                 + "var f=document.getElementById('file'),b=document.getElementById('send'),s=document.getElementById('status'),bar=document.getElementById('bar');"
                 + "f.onchange=function(){b.disabled=!f.files.length};"
@@ -449,7 +502,7 @@ final class RemotePushServer {
     }
 
     private void postReady() {
-        String dir = getPushDir(context).getAbsolutePath();
+        String dir = uploadDir.getAbsolutePath();
         main.post(() -> listener.onReady(url, dir));
     }
 

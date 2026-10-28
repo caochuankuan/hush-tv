@@ -11,11 +11,13 @@ import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageInstaller;
 import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.RadialGradient;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -50,7 +52,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Locale;
 import java.text.Collator;
 
@@ -83,6 +87,7 @@ final class LauncherView extends View {
     private static final String LAYOUT_TAGLINE = "show_tagline";
     private static final String LAYOUT_CLOCK = "clock_position";
     private static final String LAYOUT_CENTER = "center_clock";
+    private static final String LAYOUT_WALLPAPER = "wallpaper_path";
     private static final int MENU_OPEN = 0;
     private static final int MENU_PIN = 1;
     private static final int MENU_INFO = 2;
@@ -173,6 +178,19 @@ final class LauncherView extends View {
     private boolean showTagline;
     private String clockPosition = "left";
     private boolean centerClock;
+    private String wallpaperPath = "";
+    private Bitmap wallpaperBitmap;
+    private boolean wallpaperOpen;
+    private float wallpaperProgress;
+    private ValueAnimator wallpaperAnimator;
+    private final RectF wallpaperPanel = new RectF();
+    private RemotePushServer wallpaperServer;
+    private String wallpaperUrl = "";
+    private String wallpaperStatus = "";
+    private final List<File> wallpaperFiles = new ArrayList<>();
+    private final Map<String, Bitmap> wallpaperThumbs = new HashMap<>();
+    private int wallpaperSelected = -1;
+    private int wallpaperScroll;
     private boolean pushOpen;
     private String pushUrl = "";
     private String pushStatus = "";
@@ -224,6 +242,7 @@ final class LauncherView extends View {
         showTagline = layoutPrefs.getBoolean(LAYOUT_TAGLINE, true);
         clockPosition = layoutPrefs.getString(LAYOUT_CLOCK, "left");
         centerClock = layoutPrefs.getBoolean(LAYOUT_CENTER, false);
+        wallpaperPath = layoutPrefs.getString(LAYOUT_WALLPAPER, "");
         collator = Collator.getInstance(Locale.CHINA);
         collator.setStrength(Collator.PRIMARY);
         loadPins();
@@ -259,6 +278,7 @@ final class LauncherView extends View {
     void onPause() {
         stopClock();
         closePush();
+        closeWallpaper();
     }
 
     void setDefaultHome(boolean isDefaultHome) {
@@ -274,6 +294,7 @@ final class LauncherView extends View {
         super.onAttachedToWindow();
         attached = true;
         startClock();
+        loadWallpaperIfNeeded();
         registerPackageReceiver();
         if (apps.isEmpty()) {
             reloadApps();
@@ -286,6 +307,7 @@ final class LauncherView extends View {
         attached = false;
         stopClock();
         closePush();
+        closeWallpaper();
         unregisterPackageReceiver();
         super.onDetachedFromWindow();
     }
@@ -719,6 +741,7 @@ final class LauncherView extends View {
                     applyLayoutChange();
                     Toast.makeText(getContext(), "布局已更新", Toast.LENGTH_SHORT).show();
                 })
+                .setNeutralButton("壁纸设置", (d, which) -> openWallpaper())
                 .setNegativeButton("取消", null)
                 .create();
         dialog.setOnShowListener(d -> pure.requestFocus());
@@ -1596,6 +1619,7 @@ final class LauncherView extends View {
         super.onSizeChanged(w, h, oldw, oldh);
         computeLayout();
         buildBackground(w, h);
+        loadWallpaperIfNeeded();
     }
 
     private void computeLayout() {
@@ -1716,15 +1740,23 @@ final class LauncherView extends View {
         super.onDraw(canvas);
 
         paint.setStyle(Paint.Style.FILL);
-        paint.setShader(backgroundShader);
-        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-
-        paint.setShader(warmGlow);
-        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-        paint.setShader(coolGlow);
-        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-        paint.setShader(vignette);
-        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        if (wallpaperBitmap != null) {
+            drawWallpaperBitmap(canvas, wallpaperBitmap);
+            paint.setShader(null);
+            paint.setColor(0xA607080A);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setShader(vignette);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        } else {
+            paint.setShader(backgroundShader);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setShader(warmGlow);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setShader(coolGlow);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setShader(vignette);
+            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+        }
         paint.setShader(null);
 
         drawHeader(canvas);
@@ -1745,6 +1777,493 @@ final class LauncherView extends View {
         drawMenu(canvas);
         drawSettings(canvas);
         drawPush(canvas);
+        drawWallpaperDialog(canvas);
+    }
+
+    private void loadWallpaperIfNeeded() {
+        if (wallpaperBitmap != null || wallpaperPath.isEmpty()) {
+            return;
+        }
+        File file = new File(wallpaperPath);
+        if (!file.isFile()) {
+            wallpaperPath = "";
+            layoutPrefs.edit().remove(LAYOUT_WALLPAPER).apply();
+            return;
+        }
+        if (getWidth() <= 0 || getHeight() <= 0) {
+            return;
+        }
+        Bitmap bitmap = decodeImage(file, getWidth(), getHeight());
+        if (bitmap != null) {
+            wallpaperBitmap = bitmap;
+            invalidate();
+        }
+    }
+
+    private boolean applyWallpaperFile(File file) {
+        Bitmap bitmap = decodeImage(file, Math.max(getWidth(), 1280),
+                Math.max(getHeight(), 720));
+        if (bitmap == null) {
+            return false;
+        }
+        if (wallpaperBitmap != null) {
+            wallpaperBitmap.recycle();
+        }
+        wallpaperBitmap = bitmap;
+        wallpaperPath = file.getAbsolutePath();
+        layoutPrefs.edit().putString(LAYOUT_WALLPAPER, wallpaperPath).apply();
+        invalidate();
+        return true;
+    }
+
+    private void clearWallpaper() {
+        if (wallpaperBitmap != null) {
+            wallpaperBitmap.recycle();
+            wallpaperBitmap = null;
+        }
+        wallpaperPath = "";
+        layoutPrefs.edit().remove(LAYOUT_WALLPAPER).apply();
+        invalidate();
+    }
+
+    private Bitmap decodeImage(File file, int maxWidth, int maxHeight) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getAbsolutePath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+        int sample = 1;
+        while (bounds.outWidth / (sample * 2) >= maxWidth
+                && bounds.outHeight / (sample * 2) >= maxHeight) {
+            sample *= 2;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        return BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+    }
+
+    private boolean isImageFile(File file) {
+        String name = file.getName().toLowerCase(Locale.US);
+        return name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png")
+                || name.endsWith(".webp") || name.endsWith(".bmp");
+    }
+
+    private void drawWallpaperBitmap(Canvas canvas, Bitmap bitmap) {
+        if (bitmap == null || bitmap.isRecycled()) {
+            return;
+        }
+        RectF dst = new RectF(0, 0, getWidth(), getHeight());
+        drawBitmapCrop(canvas, bitmap, dst);
+    }
+
+    private void drawBitmapCrop(Canvas canvas, Bitmap bitmap, RectF dst) {
+        if (bitmap == null || bitmap.isRecycled() || dst.width() <= 0 || dst.height() <= 0) {
+            return;
+        }
+        float scale = Math.max(dst.width() / bitmap.getWidth(),
+                dst.height() / bitmap.getHeight());
+        float sourceWidth = dst.width() / scale;
+        float sourceHeight = dst.height() / scale;
+        int left = (int) ((bitmap.getWidth() - sourceWidth) / 2f);
+        int top = (int) ((bitmap.getHeight() - sourceHeight) / 2f);
+        Rect src = new Rect(left, top, (int) (left + sourceWidth), (int) (top + sourceHeight));
+        paint.setShader(null);
+        paint.setFilterBitmap(true);
+        canvas.drawBitmap(bitmap, src, dst, paint);
+        paint.setFilterBitmap(false);
+    }
+
+    private void computeWallpaperPanel() {
+        float width = dp(660);
+        float height = dp(430);
+        float left = (getWidth() - width) / 2f;
+        float top = (getHeight() - height) / 2f;
+        wallpaperPanel.set(left, top, left + width, top + height);
+    }
+
+    private void openWallpaper() {
+        closeMenu();
+        closeSettings(false);
+        closePush();
+        wallpaperOpen = true;
+        wallpaperUrl = "";
+        wallpaperStatus = "正在启动壁纸接收服务…";
+        wallpaperSelected = -1;
+        wallpaperScroll = 0;
+        refreshWallpapers(null);
+        computeWallpaperPanel();
+        wallpaperProgress = 0f;
+        if (wallpaperAnimator != null) {
+            wallpaperAnimator.cancel();
+        }
+        wallpaperAnimator = ValueAnimator.ofFloat(0f, 1f);
+        wallpaperAnimator.setDuration(160L);
+        wallpaperAnimator.setInterpolator(new DecelerateInterpolator(2f));
+        wallpaperAnimator.addUpdateListener(animation -> {
+            wallpaperProgress = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        wallpaperAnimator.start();
+
+        wallpaperServer = new RemotePushServer(getContext(), new RemotePushServer.Listener() {
+            @Override
+            public void onReady(String url, String directory) {
+                if (!wallpaperOpen) {
+                    return;
+                }
+                wallpaperUrl = url == null ? "" : url;
+                wallpaperStatus = url == null
+                        ? "未检测到局域网 IP，请确认电视已联网"
+                        : "等待手机上传图片…";
+                invalidate();
+            }
+
+            @Override
+            public void onProgress(int percent) {
+                if (!wallpaperOpen) {
+                    return;
+                }
+                wallpaperStatus = "接收中 " + percent + "%";
+                invalidate();
+            }
+
+            @Override
+            public void onFileReceived(File file) {
+                if (!wallpaperOpen) {
+                    return;
+                }
+                if (!isImageFile(file) || !applyWallpaperFile(file)) {
+                    file.delete();
+                    wallpaperStatus = "只支持图片文件";
+                    refreshWallpapers(null);
+                    invalidate();
+                    return;
+                }
+                wallpaperStatus = "已设为壁纸：" + file.getName();
+                refreshWallpapers(file.getName());
+                invalidate();
+            }
+
+            @Override
+            public void onError(String message) {
+                if (!wallpaperOpen) {
+                    return;
+                }
+                wallpaperStatus = message;
+                invalidate();
+            }
+        }, RemotePushServer.getWallpaperDir(getContext()), true);
+        wallpaperServer.start();
+        invalidate();
+    }
+
+    private void closeWallpaper() {
+        wallpaperOpen = false;
+        wallpaperProgress = 0f;
+        if (wallpaperAnimator != null) {
+            wallpaperAnimator.cancel();
+            wallpaperAnimator = null;
+        }
+        if (wallpaperServer != null) {
+            wallpaperServer.stop();
+            wallpaperServer = null;
+        }
+        for (Bitmap bitmap : wallpaperThumbs.values()) {
+            if (bitmap != null && !bitmap.isRecycled()) {
+                bitmap.recycle();
+            }
+        }
+        wallpaperThumbs.clear();
+        wallpaperSelected = -1;
+        wallpaperScroll = 0;
+        invalidate();
+    }
+
+    private void refreshWallpapers(String selectName) {
+        File dir = RemotePushServer.getWallpaperDir(getContext());
+        File[] files = dir.listFiles();
+        wallpaperFiles.clear();
+        if (files != null) {
+            Arrays.sort(files, (a, b) -> Long.compare(b.lastModified(), a.lastModified()));
+            for (File file : files) {
+                if (file.isFile() && isImageFile(file)) {
+                    wallpaperFiles.add(file);
+                }
+            }
+        }
+
+        if (selectName != null) {
+            for (int i = 0; i < wallpaperFiles.size(); i++) {
+                if (selectName.equals(wallpaperFiles.get(i).getName())) {
+                    wallpaperSelected = i;
+                    break;
+                }
+            }
+        }
+        if (wallpaperSelected < 0 && !wallpaperPath.isEmpty()) {
+            for (int i = 0; i < wallpaperFiles.size(); i++) {
+                if (wallpaperPath.equals(wallpaperFiles.get(i).getAbsolutePath())) {
+                    wallpaperSelected = i;
+                    break;
+                }
+            }
+        }
+        if (wallpaperFiles.isEmpty()) {
+            wallpaperSelected = -1;
+            wallpaperScroll = 0;
+        } else {
+            if (wallpaperSelected < 0 || wallpaperSelected >= wallpaperFiles.size()) {
+                wallpaperSelected = 0;
+            }
+            ensureWallpaperVisible();
+        }
+        invalidate();
+    }
+
+    private void ensureWallpaperVisible() {
+        int visible = 8;
+        if (wallpaperSelected < wallpaperScroll) {
+            wallpaperScroll = wallpaperSelected;
+        } else if (wallpaperSelected >= wallpaperScroll + visible) {
+            wallpaperScroll = wallpaperSelected - visible + 1;
+        }
+        int maxScroll = Math.max(0, wallpaperFiles.size() - visible);
+        wallpaperScroll = Math.max(0, Math.min(maxScroll, wallpaperScroll));
+    }
+
+    private Bitmap wallpaperThumb(File file) {
+        String key = file.getAbsolutePath();
+        Bitmap cached = wallpaperThumbs.get(key);
+        if (cached != null && !cached.isRecycled()) {
+            return cached;
+        }
+        Bitmap bitmap = decodeImage(file, 320, 200);
+        if (bitmap != null) {
+            wallpaperThumbs.put(key, bitmap);
+        }
+        return bitmap;
+    }
+
+    private void applySelectedWallpaper() {
+        if (wallpaperSelected < 0 || wallpaperSelected >= wallpaperFiles.size()) {
+            return;
+        }
+        File file = wallpaperFiles.get(wallpaperSelected);
+        if (applyWallpaperFile(file)) {
+            wallpaperStatus = "壁纸已设置：" + file.getName();
+            Toast.makeText(getContext(), "壁纸已设置", Toast.LENGTH_SHORT).show();
+        } else {
+            wallpaperStatus = "这张图片无法读取";
+        }
+        invalidate();
+    }
+
+    private void confirmDeleteWallpaper() {
+        if (wallpaperSelected < 0 || wallpaperSelected >= wallpaperFiles.size()) {
+            return;
+        }
+        File file = wallpaperFiles.get(wallpaperSelected);
+        new AlertDialog.Builder(getContext(), android.R.style.Theme_Material_Dialog_Alert)
+                .setTitle("删除壁纸")
+                .setMessage("确定删除 " + file.getName() + "？")
+                .setPositiveButton("删除", (dialog, which) -> {
+                    boolean isCurrent = wallpaperPath.equals(file.getAbsolutePath());
+                    if (isCurrent) {
+                        clearWallpaper();
+                    }
+                    if (file.delete()) {
+                        Bitmap thumb = wallpaperThumbs.remove(file.getAbsolutePath());
+                        if (thumb != null && !thumb.isRecycled()) {
+                            thumb.recycle();
+                        }
+                        wallpaperStatus = "已删除 " + file.getName();
+                        refreshWallpapers(null);
+                    } else {
+                        Toast.makeText(getContext(), "删除失败", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private int wallpaperThumbAt(float x, float y) {
+        if (!wallpaperOpen || !wallpaperPanel.contains(x, y)) {
+            return -1;
+        }
+        float thumbTop = wallpaperPanel.top + dp(184);
+        float thumbHeight = dp(80);
+        float rowGap = dp(10);
+        if (y < thumbTop || y > thumbTop + 2 * thumbHeight + rowGap) {
+            return -1;
+        }
+        int row = y < thumbTop + thumbHeight ? 0 : 1;
+        float gap = dp(12);
+        float thumbWidth = (wallpaperPanel.width() - dp(48) - 3 * gap) / 4f;
+        float column = (x - wallpaperPanel.left - dp(24)) / (thumbWidth + gap);
+        if (column < 0 || column >= 4) {
+            return -1;
+        }
+        int index = wallpaperScroll + row * 4 + (int) column;
+        return index >= 0 && index < wallpaperFiles.size() ? index : -1;
+    }
+
+    private void drawWallpaperDialog(Canvas canvas) {
+        if (!wallpaperOpen || wallpaperProgress <= 0f) {
+            return;
+        }
+        computeWallpaperPanel();
+        float progress = Math.max(0f, Math.min(1f, wallpaperProgress));
+        float left = wallpaperPanel.left;
+        float top = wallpaperPanel.top;
+        float right = wallpaperPanel.right;
+        float bottom = wallpaperPanel.bottom;
+        float radius = dp(18);
+
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.argb((int) (172 * progress), 0, 0, 0));
+        canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+
+        canvas.save();
+        float scale = 0.965f + 0.035f * progress;
+        canvas.scale(scale, scale, wallpaperPanel.centerX(), wallpaperPanel.centerY());
+
+        paint.setColor(0x22FFFFFF);
+        rect.set(left - dp(2), top - dp(2), right + dp(2), bottom + dp(2));
+        canvas.drawRoundRect(rect, radius + dp(2), radius + dp(2), paint);
+        paint.setColor(0xFF14161A);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(left, top, right, bottom, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.03f);
+        drawText(canvas, "壁纸设置", left + dp(24), top + dp(32), sp(17), COLOR_CREAM);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.08f);
+        drawText(canvas, "手机上传图片，收到后自动设为壁纸", left + dp(24), top + dp(50),
+                sp(8), 0xFF747A83);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.14f);
+        drawText(canvas, "BACK 关闭", right - dp(18), top + dp(26), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(62), right - dp(16), top + dp(63), paint);
+
+        rect.set(left + dp(24), top + dp(76), right - dp(24), top + dp(112));
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xFF0B0C0F);
+        canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(0.8f));
+        paint.setColor(0xFF2A2D33);
+        canvas.drawRoundRect(rect, dp(10), dp(10), paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        textPaint.setTypeface(Typeface.MONOSPACE);
+        textPaint.setLetterSpacing(0f);
+        if (wallpaperUrl.isEmpty()) {
+            drawText(canvas, "正在获取电视地址…", left + dp(38), top + dp(99), sp(13),
+                    0xFF777D86);
+        } else {
+            drawText(canvas, wallpaperUrl, left + dp(38), top + dp(99), sp(15), COLOR_ACCENT);
+        }
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.04f);
+        measurePaint.setTypeface(typeRegular);
+        measurePaint.setTextSize(sp(10));
+        CharSequence status = TextUtils.ellipsize(wallpaperStatus, measurePaint,
+                right - left - dp(48), TextUtils.TruncateAt.END);
+        drawText(canvas, status.toString(), left + dp(24), top + dp(136), sp(10),
+                0xFFC9C5BC);
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(24), top + dp(146), right - dp(24), top + dp(149), paint);
+
+        textPaint.setTypeface(typeMedium);
+        textPaint.setLetterSpacing(0.06f);
+        drawText(canvas, "历史壁纸", left + dp(24), top + dp(172), sp(9), 0xFFE1DCD2);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        textPaint.setLetterSpacing(0.04f);
+        drawText(canvas, wallpaperFiles.size() + " 张  ·  OK 设为壁纸  ·  MENU 删除",
+                right - dp(24), top + dp(172), sp(7), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        float thumbTop = top + dp(184);
+        float gap = dp(12);
+        float thumbWidth = (right - left - dp(48) - 3 * gap) / 4f;
+        float thumbHeight = dp(80);
+        if (wallpaperFiles.isEmpty()) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.03f);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            drawText(canvas, "还没有壁纸", left + (right - left) / 2f,
+                    thumbTop + dp(46), sp(12), 0xFF777D86);
+            textPaint.setTypeface(typeRegular);
+            textPaint.setLetterSpacing(0.08f);
+            drawText(canvas, "手机上传图片后会自动设置", left + (right - left) / 2f,
+                    thumbTop + dp(68), sp(9), 0xFF5E646D);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+        } else {
+            for (int i = 0; i < 8; i++) {
+                int index = wallpaperScroll + i;
+                if (index >= wallpaperFiles.size()) {
+                    break;
+                }
+                int row = i / 4;
+                int column = i % 4;
+                float thumbLeft = left + dp(24) + column * (thumbWidth + gap);
+                float thumbTopRow = thumbTop + row * (thumbHeight + dp(10));
+                RectF thumbRect = new RectF(thumbLeft, thumbTopRow,
+                        thumbLeft + thumbWidth, thumbTopRow + thumbHeight);
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(0xFF0B0C0F);
+                canvas.drawRoundRect(thumbRect, dp(8), dp(8), paint);
+                Bitmap thumb = wallpaperThumb(wallpaperFiles.get(index));
+                if (thumb != null) {
+                    canvas.save();
+                    canvas.clipRect(thumbRect);
+                    drawBitmapCrop(canvas, thumb, thumbRect);
+                    canvas.restore();
+                } else {
+                    textPaint.setTextAlign(Paint.Align.CENTER);
+                    textPaint.setLetterSpacing(0.04f);
+                    drawText(canvas, "?", thumbRect.centerX(), thumbRect.centerY() + sp(4),
+                            sp(16), 0xFF5E646D);
+                    textPaint.setTextAlign(Paint.Align.LEFT);
+                }
+                boolean selected = index == wallpaperSelected;
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(selected ? dp(2) : dp(1));
+                paint.setColor(selected ? COLOR_CREAM : 0xFF2A2D33);
+                canvas.drawRoundRect(thumbRect, dp(8), dp(8), paint);
+                if (wallpaperPath.equals(wallpaperFiles.get(index).getAbsolutePath())) {
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(COLOR_ACCENT);
+                    canvas.drawCircle(thumbRect.right - dp(10), thumbRect.top + dp(10),
+                            dp(3), paint);
+                }
+            }
+        }
+
+        paint.setColor(0xFF24272D);
+        canvas.drawRect(left + dp(16), top + dp(400), right - dp(16), top + dp(401), paint);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.12f);
+        drawText(canvas, "BACK 关闭", left + dp(24), top + dp(417), sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        drawText(canvas, "同一局域网 · 上传后自动设置", right - dp(24), top + dp(417),
+                sp(8), 0xFF5E646D);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        canvas.restore();
     }
 
     private void drawHeader(Canvas canvas) {
@@ -2468,6 +2987,55 @@ final class LauncherView extends View {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
+        if (wallpaperOpen) {
+            switch (keyCode) {
+                case KeyEvent.KEYCODE_DPAD_LEFT:
+                    if (wallpaperSelected > 0) {
+                        wallpaperSelected--;
+                        ensureWallpaperVisible();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_RIGHT:
+                    if (wallpaperSelected >= 0 && wallpaperSelected < wallpaperFiles.size() - 1) {
+                        wallpaperSelected++;
+                        ensureWallpaperVisible();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_UP:
+                    if (wallpaperSelected >= 0) {
+                        wallpaperSelected = Math.max(0, wallpaperSelected - 4);
+                        ensureWallpaperVisible();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_DOWN:
+                    if (wallpaperSelected >= 0 && wallpaperSelected < wallpaperFiles.size()) {
+                        wallpaperSelected = Math.min(wallpaperFiles.size() - 1,
+                                wallpaperSelected + 4);
+                        ensureWallpaperVisible();
+                        invalidate();
+                    }
+                    return true;
+                case KeyEvent.KEYCODE_DPAD_CENTER:
+                case KeyEvent.KEYCODE_ENTER:
+                case KeyEvent.KEYCODE_NUMPAD_ENTER:
+                case KeyEvent.KEYCODE_BUTTON_A:
+                case KeyEvent.KEYCODE_SPACE:
+                    applySelectedWallpaper();
+                    return true;
+                case KeyEvent.KEYCODE_MENU:
+                    confirmDeleteWallpaper();
+                    return true;
+                case KeyEvent.KEYCODE_BACK:
+                    closeWallpaper();
+                    return true;
+                default:
+                    return true;
+            }
+        }
+
         if (pushOpen) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_DPAD_UP:
@@ -2639,7 +3207,7 @@ final class LauncherView extends View {
     @Override
     public boolean onKeyLongPress(int keyCode, KeyEvent event) {
         if (keyCode == KeyEvent.KEYCODE_MENU) {
-            if (settingsOpen || pushOpen) {
+            if (settingsOpen || pushOpen || wallpaperOpen) {
                 return true;
             }
             closeMenu();
@@ -2654,6 +3222,18 @@ final class LauncherView extends View {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
+        if (wallpaperOpen) {
+            if (action == MotionEvent.ACTION_UP) {
+                int index = wallpaperThumbAt(event.getX(), event.getY());
+                if (index >= 0) {
+                    wallpaperSelected = index;
+                    applySelectedWallpaper();
+                } else if (!wallpaperPanel.contains(event.getX(), event.getY())) {
+                    closeWallpaper();
+                }
+            }
+            return true;
+        }
         if (pushOpen) {
             if (action == MotionEvent.ACTION_UP) {
                 int row = pushRowAt(event.getX(), event.getY());
