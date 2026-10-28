@@ -1747,6 +1747,9 @@ final class LauncherView extends View {
     protected void onDraw(Canvas canvas) {
         super.onDraw(canvas);
 
+        paint.setAlpha(255);
+        paint.setColorFilter(null);
+        paint.setShader(null);
         paint.setStyle(Paint.Style.FILL);
         if (wallpaperBitmap != null) {
             drawWallpaperBitmap(canvas, wallpaperBitmap);
@@ -1863,6 +1866,9 @@ final class LauncherView extends View {
         if (bitmap == null || bitmap.isRecycled()) {
             return;
         }
+        paint.setAlpha(255);
+        paint.setColorFilter(null);
+        paint.setShader(null);
         RectF dst = new RectF(0, 0, getWidth(), getHeight());
         drawBitmapCrop(canvas, bitmap, dst);
     }
@@ -1902,6 +1908,8 @@ final class LauncherView extends View {
         int left = (int) ((bitmap.getWidth() - sourceWidth) / 2f);
         int top = (int) ((bitmap.getHeight() - sourceHeight) / 2f);
         Rect src = new Rect(left, top, (int) (left + sourceWidth), (int) (top + sourceHeight));
+        paint.setAlpha(255);
+        paint.setColorFilter(null);
         paint.setShader(null);
         paint.setFilterBitmap(true);
         canvas.drawBitmap(bitmap, src, dst, paint);
