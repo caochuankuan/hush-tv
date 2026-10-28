@@ -147,6 +147,9 @@ final class LauncherView extends View {
     private float maxScroll;
     private float scroll;
     private float targetScroll;
+    private float horizontalScroll;
+    private float targetHorizontalScroll;
+    private ValueAnimator horizontalScrollAnimator;
 
     private float[] focusProgress = new float[0];
     private ValueAnimator[] focusAnimators = new ValueAnimator[0];
@@ -621,6 +624,9 @@ final class LauncherView extends View {
         if (pureMode) {
             return "纯净";
         }
+        if ("horizontal".equals(clockPosition)) {
+            return "横向";
+        }
         String summary = "标准 · " + clockPositionLabel(clockPosition);
         return centerClock ? summary + " · 居中" : summary;
     }
@@ -633,6 +639,8 @@ final class LauncherView extends View {
                 return "右";
             case "bottom":
                 return "下";
+            case "horizontal":
+                return "横向";
             case "left":
             default:
                 return "左";
@@ -675,8 +683,8 @@ final class LauncherView extends View {
 
         RadioGroup positions = new RadioGroup(context);
         positions.setOrientation(RadioGroup.HORIZONTAL);
-        String[] values = {"left", "top", "right", "bottom"};
-        String[] labels = {"左", "上", "右", "下"};
+        String[] values = {"left", "top", "right", "bottom", "horizontal"};
+        String[] labels = {"左", "上", "右", "下", "横向"};
         int[] ids = new int[values.length];
         for (int i = 0; i < values.length; i++) {
             RadioButton button = new RadioButton(context);
@@ -1651,6 +1659,15 @@ final class LauncherView extends View {
             gridBottom = h - dp(44);
             columns = 4;
             visibleRows = 3;
+        } else if ("horizontal".equals(clockPosition)) {
+            leftWidth = w - padH * 2f;
+            dividerX = 0f;
+            gridLeft = padH;
+            gridRight = w - padH;
+            gridTop = h * 0.71f;
+            gridBottom = h - dp(34);
+            columns = 6;
+            visibleRows = 1;
         } else if ("top".equals(clockPosition)) {
             leftWidth = w - padH * 2f;
             dividerX = 0f;
@@ -1712,6 +1729,10 @@ final class LauncherView extends View {
         return "right".equals(clockPosition);
     }
 
+    private boolean isHorizontalLayout() {
+        return !pureMode && "horizontal".equals(clockPosition);
+    }
+
     private void rowMetrics() {
         cardWidth = (gridRight - gridLeft - (columns - 1) * gapX) / columns;
         cardHeight = (gridHeight - (visibleRows - 1) * gapY) / visibleRows;
@@ -1769,6 +1790,8 @@ final class LauncherView extends View {
         drawHeader(canvas);
         if (pureMode) {
             drawApps(canvas);
+        } else if (isHorizontalLayout()) {
+            drawHorizontalLayout(canvas);
         } else if ("top".equals(clockPosition)) {
             drawHeroTop(canvas);
             drawApps(canvas);
@@ -2307,37 +2330,143 @@ final class LauncherView extends View {
         canvas.restore();
     }
 
-    private void drawWallpaperReadabilityScrim(Canvas canvas) {
-        float w = getWidth();
+    private void ensureHorizontalVisible(int index, boolean animate) {
+        int visible = 6;
+        int maxStart = Math.max(0, apps.size() - visible);
+        int start = Math.max(0, Math.min(maxStart, index - visible / 2));
+        if (start == targetHorizontalScroll && Math.abs(horizontalScroll - start) < 0.5f) {
+            return;
+        }
+        targetHorizontalScroll = start;
+        if (animate) {
+            animateHorizontalScroll(start);
+        } else {
+            horizontalScroll = start;
+            invalidate();
+        }
+    }
+
+    private void animateHorizontalScroll(float target) {
+        if (horizontalScrollAnimator != null) {
+            horizontalScrollAnimator.cancel();
+        }
+        horizontalScrollAnimator = ValueAnimator.ofFloat(horizontalScroll, target);
+        horizontalScrollAnimator.setDuration(220L);
+        horizontalScrollAnimator.setInterpolator(new DecelerateInterpolator(1.6f));
+        horizontalScrollAnimator.addUpdateListener(animation -> {
+            horizontalScroll = (float) animation.getAnimatedValue();
+            invalidate();
+        });
+        horizontalScrollAnimator.start();
+    }
+
+    private void drawHorizontalLayout(Canvas canvas) {
         float h = getHeight();
-        if (!pureMode) {
-            Shader shader;
-            if (sideClock()) {
-                if (rightClock()) {
-                    shader = new LinearGradient(w, 0, w * 0.45f, 0, 0x3307080A, 0x0007080A,
-                            Shader.TileMode.CLAMP);
-                } else {
-                    shader = new LinearGradient(0, 0, w * 0.55f, 0, 0x3307080A, 0x0007080A,
-                            Shader.TileMode.CLAMP);
-                }
-            } else if ("top".equals(clockPosition)) {
-                shader = new LinearGradient(0, 0, 0, h * 0.42f, 0x5C07080A, 0x0007080A,
-                        Shader.TileMode.CLAMP);
-            } else {
-                shader = new LinearGradient(0, h, 0, h * 0.58f, 0x5C07080A, 0x0007080A,
-                        Shader.TileMode.CLAMP);
-            }
-            paint.setShader(shader);
-            canvas.drawRect(0, 0, w, h, paint);
+        AppEntry focused = focusedIndex >= 0 && focusedIndex < apps.size()
+                ? apps.get(focusedIndex) : null;
+
+        textPaint.setTypeface(typeLight);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(-0.02f);
+        textPaint.setFontFeatureSettings("tnum");
+        float clockSize = sp(34);
+        drawText(canvas, timeText, padH, h * 0.17f, clockSize, COLOR_CREAM);
+        textPaint.setFontFeatureSettings(null);
+        textPaint.setTextSize(clockSize);
+        float clockWidth = textPaint.measureText(timeText);
+        textPaint.setTypeface(typeRegular);
+        textPaint.setLetterSpacing(0.05f);
+        drawText(canvas, dateText, padH + clockWidth + dp(16), h * 0.17f, sp(10),
+                wallpaperBitmap != null ? 0xFFE8E3D9 : COLOR_DATE);
+
+        String title = focused == null ? "这里还没有应用" : focused.label;
+        float titleSize = sp(44);
+        measurePaint.setTypeface(typeLight);
+        measurePaint.setTextSize(titleSize);
+        measurePaint.setLetterSpacing(-0.02f);
+        float maxTitleWidth = getWidth() - padH * 2f;
+        if (measurePaint.measureText(title) > maxTitleWidth) {
+            titleSize *= maxTitleWidth / measurePaint.measureText(title);
+        }
+        textPaint.setTypeface(typeLight);
+        textPaint.setLetterSpacing(-0.02f);
+        drawText(canvas, title, padH, h * 0.29f, titleSize, COLOR_CREAM);
+
+        textPaint.setTypeface(typeRegular);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+        textPaint.setLetterSpacing(0.05f);
+        drawText(canvas, focused == null ? "按 OK 打开系统设置" : "OK 打开  ·  MENU 操作  ·  ← → 滚动",
+                padH, h * 0.335f, sp(10),
+                wallpaperBitmap != null ? 0xFFE2DED6 : 0xFF7A8089);
+
+        float shelfTop = h * 0.71f;
+        float shelfBottom = h - dp(34);
+        RectF shelf = new RectF(padH - dp(6), shelfTop,
+                getWidth() - padH + dp(6), shelfBottom);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0x66E8E4DC);
+        canvas.drawRoundRect(shelf, dp(30), dp(30), paint);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        paint.setColor(0x33FFFFFF);
+        canvas.drawRoundRect(shelf, dp(30), dp(30), paint);
+        paint.setStyle(Paint.Style.FILL);
+
+        if (apps.isEmpty()) {
+            textPaint.setTypeface(typeRegular);
+            textPaint.setTextAlign(Paint.Align.CENTER);
+            textPaint.setLetterSpacing(0.08f);
+            drawText(canvas, "等待应用列表", shelf.centerX(), shelf.centerY() + sp(4),
+                    sp(11), 0xFF55575A);
+            textPaint.setTextAlign(Paint.Align.LEFT);
+            return;
         }
 
-        paint.setShader(new LinearGradient(0, 0, 0, dp(78), 0x3307080A, 0x0007080A,
-                Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, w, dp(78), paint);
-        paint.setShader(new LinearGradient(0, h, 0, h - dp(78), 0x4007080A, 0x0007080A,
-                Shader.TileMode.CLAMP));
-        canvas.drawRect(0, h - dp(84), w, h, paint);
-        paint.setShader(null);
+        float innerLeft = shelf.left + dp(26);
+        float usable = shelf.width() - dp(52);
+        float iconSize = Math.min(dp(92), (usable - 5 * dp(10)) / 6f);
+        float gap = (usable - 6 * iconSize) / 5f;
+        float iconTop = shelf.centerY() - iconSize / 2f;
+
+        for (int i = 0; i < apps.size(); i++) {
+            float left = innerLeft + (i - horizontalScroll) * (iconSize + gap);
+            if (left + iconSize < shelf.left || left > shelf.right) {
+                continue;
+            }
+            AppEntry entry = apps.get(i);
+            RectF tile = new RectF(left, iconTop, left + iconSize, iconTop + iconSize);
+            paint.setColor(0xD90B0C0F);
+            canvas.drawRoundRect(tile, iconSize * 0.24f, iconSize * 0.24f, paint);
+
+            if (entry.icon != null) {
+                canvas.save();
+                Path clip = new Path();
+                clip.addRoundRect(tile, iconSize * 0.24f, iconSize * 0.24f, Path.Direction.CW);
+                canvas.clipPath(clip);
+                drawBitmapCrop(canvas, entry.icon, tile);
+                canvas.restore();
+            } else {
+                textPaint.setTypeface(typeMedium);
+                textPaint.setTextAlign(Paint.Align.CENTER);
+                textPaint.setLetterSpacing(0);
+                String letter = entry.label.isEmpty() ? "?" : entry.label.substring(0, 1);
+                drawText(canvas, letter, tile.centerX(), tile.centerY() + sp(10), sp(26),
+                        COLOR_CREAM);
+                textPaint.setTextAlign(Paint.Align.LEFT);
+            }
+
+            boolean selected = i == focusedIndex;
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(selected ? dp(2.5f) : dp(1));
+            paint.setColor(selected ? COLOR_CREAM : 0x33FFFFFF);
+            canvas.drawRoundRect(tile, iconSize * 0.24f, iconSize * 0.24f, paint);
+            paint.setStyle(Paint.Style.FILL);
+
+            if (isPinned(entry)) {
+                paint.setColor(COLOR_ACCENT);
+                canvas.drawCircle(tile.left + dp(10), tile.top + dp(10), dp(2.2f), paint);
+            }
+        }
     }
 
     private void drawHeader(Canvas canvas) {
@@ -3063,7 +3192,11 @@ final class LauncherView extends View {
             }
             focusProgress[index] = 1f;
         }
-        ensureVisible(index, true);
+        if (isHorizontalLayout()) {
+            ensureHorizontalVisible(index, true);
+        } else {
+            ensureVisible(index, true);
+        }
         invalidate();
     }
 
@@ -3088,6 +3221,20 @@ final class LauncherView extends View {
     private boolean moveFocus(int dx, int dy) {
         if (apps.isEmpty()) {
             return false;
+        }
+        if (isHorizontalLayout()) {
+            if (dx != 0) {
+                int target = Math.max(0, Math.min(apps.size() - 1, focusedIndex + dx));
+                if (target != focusedIndex) {
+                    setFocus(target, true);
+                    playSoundEffect(SoundEffectConstants.CLICK);
+                }
+            }
+            if (dy < 0) {
+                headerFocused = true;
+                invalidate();
+            }
+            return true;
         }
         int col = focusedIndex % columns;
         int row = focusedIndex / columns;

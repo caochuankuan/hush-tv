@@ -2,7 +2,7 @@
 
 > 少一点，刚刚好。
 
-一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **120 KB**。
+一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **122 KB**。
 
 ![HUSH TV 桌面](screenshots/home.png)
 
@@ -51,7 +51,7 @@
 ## 直接安装
 
 ```bash
-adb install -r dist/HUSH-TV-1.9.4.apk
+adb install -r dist/HUSH-TV-1.10.0.apk
 
 # 如果之前装过 v1.2.0 的预编译 APK（旧签名），需要先卸载旧包：
 # adb uninstall com.hush.tv
@@ -196,7 +196,7 @@ adb shell wm density       # Physical density: 320
 - **纯净模式**：隐藏时钟、日期、问候和提示文案，应用列表以 4 列全屏宫格展示。
 - 关闭纯净模式后，可以选择：
   - 是否显示桌面提示文案（“少一点，刚刚好。”）
-  - 时间位置：左 / 上 / 右 / 下，默认是左
+  - 时间位置：左 / 上 / 右 / 下 / 横向，默认是左
   - 时间居中：开启后，时钟会在对应区域内居中；上/下时水平居中，左/右时在侧栏内水平和垂直居中
 
 设置会保存到 `SharedPreferences`，重启后保持。
@@ -204,6 +204,18 @@ adb shell wm density       # Physical density: 320
 ![时间居中](screenshots/centered.png)
 
 ![纯净模式](screenshots/pure.png)
+
+## 横向布局
+
+“时间位置”里选择「横向」：
+
+- 左上显示时间、日期和当前选中的 App 名称
+- 底部是一条横向 App 架，一屏 6 个
+- 左右方向键滚动
+- 没有独立的时间区域，整个壁纸作为背景
+- `↑` 进入设置，`OK` 打开，`MENU` 操作
+
+![横向布局](screenshots/horizontal.png)
 
 ## 壁纸设置
 
