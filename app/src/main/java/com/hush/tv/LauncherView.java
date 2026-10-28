@@ -14,6 +14,8 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -115,6 +117,7 @@ final class LauncherView extends View {
     private final RectF rect = new RectF();
     private final RectF cardRect = new RectF();
 
+    private final ColorMatrixColorFilter cardBackdropFilter = createCardBackdropFilter();
     private final Typeface typeLight = Typeface.create("sans-serif-light", Typeface.NORMAL);
     private final Typeface typeRegular = Typeface.create("sans-serif", Typeface.NORMAL);
     private final Typeface typeMedium = Typeface.create("sans-serif-medium", Typeface.NORMAL);
@@ -1748,11 +1751,11 @@ final class LauncherView extends View {
         if (wallpaperBitmap != null) {
             drawWallpaperBitmap(canvas, wallpaperBitmap);
             paint.setShader(null);
-            paint.setColor(0x4D07080A);
+            paint.setColor(0x2607080A);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
             drawWallpaperReadabilityScrim(canvas);
             paint.setShader(vignette);
-            paint.setAlpha(90);
+            paint.setAlpha(50);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
             paint.setAlpha(255);
         } else {
@@ -1881,8 +1884,8 @@ final class LauncherView extends View {
             }
             return;
         }
-        int smallWidth = Math.max(1, w / 14);
-        int smallHeight = Math.max(1, h / 14);
+        int smallWidth = Math.max(1, w / 36);
+        int smallHeight = Math.max(1, h / 36);
         Bitmap small = Bitmap.createBitmap(smallWidth, smallHeight, Bitmap.Config.ARGB_8888);
         Canvas smallCanvas = new Canvas(small);
         drawBitmapCrop(smallCanvas, wallpaperBitmap,
@@ -2310,10 +2313,10 @@ final class LauncherView extends View {
             Shader shader;
             if (sideClock()) {
                 if (rightClock()) {
-                    shader = new LinearGradient(w, 0, w * 0.45f, 0, 0x5C07080A, 0x0007080A,
+                    shader = new LinearGradient(w, 0, w * 0.45f, 0, 0x3307080A, 0x0007080A,
                             Shader.TileMode.CLAMP);
                 } else {
-                    shader = new LinearGradient(0, 0, w * 0.55f, 0, 0x5C07080A, 0x0007080A,
+                    shader = new LinearGradient(0, 0, w * 0.55f, 0, 0x3307080A, 0x0007080A,
                             Shader.TileMode.CLAMP);
                 }
             } else if ("top".equals(clockPosition)) {
@@ -2327,10 +2330,10 @@ final class LauncherView extends View {
             canvas.drawRect(0, 0, w, h, paint);
         }
 
-        paint.setShader(new LinearGradient(0, 0, 0, dp(86), 0x4D07080A, 0x0007080A,
+        paint.setShader(new LinearGradient(0, 0, 0, dp(78), 0x3307080A, 0x0007080A,
                 Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, w, dp(86), paint);
-        paint.setShader(new LinearGradient(0, h, 0, h - dp(84), 0x6607080A, 0x0007080A,
+        canvas.drawRect(0, 0, w, dp(78), paint);
+        paint.setShader(new LinearGradient(0, h, 0, h - dp(78), 0x4007080A, 0x0007080A,
                 Shader.TileMode.CLAMP));
         canvas.drawRect(0, h - dp(84), w, h, paint);
         paint.setShader(null);
@@ -2376,19 +2379,23 @@ final class LauncherView extends View {
             rect.inset(-dp(4), -dp(4));
             canvas.drawRoundRect(rect, dp(18), dp(18), paint);
         }
+        boolean chipGlass = wallpaperBitmap != null;
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(headerFocused ? COLOR_CARD_FOCUS : 0x16191D);
+        paint.setColor(headerFocused ? COLOR_CARD_FOCUS
+                : (chipGlass ? 0x2EFFFFFF : 0x16191D));
         canvas.drawRoundRect(settingsChip, dp(14), dp(14), paint);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
-        paint.setColor(headerFocused ? 0x66FFFFFF : 0xFF30343B);
+        paint.setColor(headerFocused ? 0x66FFFFFF
+                : (chipGlass ? 0x40FFFFFF : 0xFF30343B));
         canvas.drawRoundRect(settingsChip, dp(14), dp(14), paint);
         paint.setStyle(Paint.Style.FILL);
         textPaint.setTypeface(typeMedium);
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setLetterSpacing(0.04f);
         drawText(canvas, "↑ 设置", settingsChip.centerX(), settingsChip.centerY() + sp(3.2f),
-                sp(9), headerFocused ? COLOR_INK : 0xFFA5ABB3);
+                sp(9), headerFocused ? COLOR_INK
+                        : (chipGlass ? 0xFFF5F1E8 : 0xFFA5ABB3));
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
@@ -2422,11 +2429,11 @@ final class LauncherView extends View {
             float labelWidth = textWidth("现在", typeRegular, sp(9), 0.24f);
             canvas.drawCircle(x - labelWidth / 2f - dp(7), gridTop + dp(51) + shift, dp(2), textPaint);
             drawText(canvas, "现在", x + dp(4), gridTop + dp(55) + shift, sp(9),
-                    wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
+                    wallpaperBitmap != null ? 0xFFF1EDE3 : 0xFF7A8089);
         } else {
             canvas.drawCircle(x + direction * dp(2), gridTop + dp(51), dp(2), textPaint);
             drawText(canvas, "现在", x + direction * dp(11), gridTop + dp(55), sp(9),
-                    0xFF7A8089);
+                    wallpaperBitmap != null ? 0xFFF1EDE3 : 0xFF7A8089);
         }
 
         textPaint.setTypeface(typeLight);
@@ -2446,12 +2453,12 @@ final class LauncherView extends View {
         textPaint.setTextAlign(align);
         textPaint.setLetterSpacing(0.055f);
         drawText(canvas, dateText, centered ? x : x + direction * dp(2), dp(285) + shift,
-                sp(14), COLOR_DATE);
+                sp(14), wallpaperBitmap != null ? 0xFFF2EEE5 : COLOR_DATE);
 
         textPaint.setTypeface(typeMedium);
         textPaint.setLetterSpacing(0.04f);
         drawText(canvas, greeting, centered ? x : x + direction * dp(2), dp(322) + shift,
-                sp(17), 0xFFE7E2D8);
+                sp(17), wallpaperBitmap != null ? 0xFFFFFBF3 : 0xFFE7E2D8);
 
         textPaint.setStyle(Paint.Style.STROKE);
         textPaint.setStrokeWidth(dp(1));
@@ -2472,7 +2479,7 @@ final class LauncherView extends View {
             textPaint.setLetterSpacing(0.12f);
             drawText(canvas, "少一点，刚刚好。", centered ? x : x + direction * dp(2),
                     dp(390) + shift, sp(10),
-                    wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
+                    wallpaperBitmap != null ? 0xFFEDE8DE : 0xFF686E77);
         }
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
@@ -2498,12 +2505,13 @@ final class LauncherView extends View {
             textPaint.setTextAlign(Paint.Align.CENTER);
             textPaint.setLetterSpacing(0.04f);
             drawText(canvas, dateText + "  ·  " + greeting, getWidth() / 2f,
-                    getHeight() * 0.315f, sp(13), COLOR_DATE);
+                    getHeight() * 0.315f, sp(13),
+                    wallpaperBitmap != null ? 0xFFF2EEE5 : COLOR_DATE);
             if (showTagline) {
                 textPaint.setLetterSpacing(0.12f);
                 drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
                         getHeight() * 0.35f, sp(9),
-                        wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
+                        wallpaperBitmap != null ? 0xFFEDE8DE : 0xFF686E77);
             }
             textPaint.setTextAlign(Paint.Align.LEFT);
             return;
@@ -2550,12 +2558,13 @@ final class LauncherView extends View {
             textPaint.setTextAlign(Paint.Align.CENTER);
             textPaint.setLetterSpacing(0.04f);
             drawText(canvas, dateText + "  ·  " + greeting, getWidth() / 2f,
-                    getHeight() * 0.77f, sp(13), COLOR_DATE);
+                    getHeight() * 0.77f, sp(13),
+                    wallpaperBitmap != null ? 0xFFF2EEE5 : COLOR_DATE);
             if (showTagline) {
                 textPaint.setLetterSpacing(0.12f);
                 drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
                         getHeight() * 0.96f, sp(9),
-                        wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
+                        wallpaperBitmap != null ? 0xFFEDE8DE : 0xFF686E77);
             }
             textPaint.setTextAlign(Paint.Align.LEFT);
             return;
@@ -2568,7 +2577,7 @@ final class LauncherView extends View {
         textPaint.setColor(COLOR_ACCENT);
         canvas.drawCircle(padH + dp(2), getHeight() * 0.70f, dp(2), textPaint);
         drawText(canvas, "现在", padH + dp(11), getHeight() * 0.704f, sp(9),
-                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
+                wallpaperBitmap != null ? 0xFFF1EDE3 : 0xFF7A8089);
         textPaint.setTypeface(typeLight);
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setLetterSpacing(-0.035f);
@@ -2647,7 +2656,8 @@ final class LauncherView extends View {
         }
 
         canvas.save();
-        canvas.clipRect(gridLeft - dp(12), gridTop - dp(2), gridRight + dp(12), gridBottom + dp(2));
+        canvas.clipRect(gridLeft - dp(16), gridTop - dp(24),
+                gridRight + dp(16), gridBottom + dp(24));
         for (int i = 0; i < apps.size(); i++) {
             int row = i / columns;
             float top = gridTop + gridOffsetY + row * (cardHeight + gapY) - scroll;
@@ -2664,20 +2674,18 @@ final class LauncherView extends View {
     private void drawCard(Canvas canvas, int index, float top) {
         AppEntry entry = apps.get(index);
         float focus = !headerFocused && index < focusProgress.length ? focusProgress[index] : 0f;
-        float scale = 1f + 0.045f * focus;
         float centerX = gridLeft + (index % columns) * (cardWidth + gapX) + cardWidth / 2f;
-        float centerY = top + cardHeight / 2f;
 
         canvas.save();
-        canvas.scale(scale, scale, centerX, centerY);
-        float drawTop = top - dp(3) * focus;
+        float drawTop = top;
 
         cardRect.set(centerX - cardWidth / 2f, drawTop,
                 centerX + cardWidth / 2f, drawTop + cardHeight);
         float radius = dp(18);
         boolean glass = wallpaperBitmap != null;
+        boolean focused = focus > 0.5f;
 
-        if (focus > 0.01f) {
+        if (focus > 0.01f && !glass) {
             paint.setStyle(Paint.Style.FILL);
             paint.setColor(withAlpha(COLOR_ACCENT, (int) (0x1C * focus)));
             rect.set(cardRect);
@@ -2710,21 +2718,30 @@ final class LauncherView extends View {
                 paint.setShader(null);
                 paint.setAlpha(255);
                 paint.setFilterBitmap(true);
+                paint.setColorFilter(cardBackdropFilter);
                 canvas.drawBitmap(wallpaperBlurred, safe, dst, paint);
+                paint.setColorFilter(null);
                 paint.setFilterBitmap(false);
             }
 
-            paint.setColor(0x30101216);
+            paint.setColor(0x12101A24);
             canvas.drawRect(cardRect, paint);
             paint.setShader(new LinearGradient(cardRect.left, cardRect.top,
                     cardRect.left, cardRect.top + cardHeight * 0.55f,
-                    0x1CFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+                    0x30FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
             canvas.drawRect(cardRect, paint);
             paint.setShader(new LinearGradient(cardRect.left, cardRect.top + cardHeight * 0.38f,
-                    cardRect.left, cardRect.bottom, 0x00000000, 0x73000000,
+                    cardRect.left, cardRect.bottom, 0x00000000, 0x99000000,
                     Shader.TileMode.CLAMP));
             canvas.drawRect(cardRect, paint);
+            paint.setShader(new LinearGradient(cardRect.left, cardRect.top,
+                    cardRect.right, cardRect.bottom,
+                    new int[]{0x38FFFFFF, 0x08FFFFFF, 0x00FFFFFF},
+                    new float[]{0f, 0.42f, 0.82f}, Shader.TileMode.CLAMP));
+            canvas.drawRect(cardRect, paint);
             paint.setShader(null);
+            paint.setColor(0x0FFFFFFF);
+            canvas.drawRect(cardRect, paint);
             canvas.restore();
 
             if (focus > 0.01f) {
@@ -2736,25 +2753,23 @@ final class LauncherView extends View {
             canvas.drawRoundRect(cardRect, radius, radius, paint);
         }
 
-        if (!glass || focus > 0.01f) {
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(1));
-            int borderColor = glass ? 0x1AFFFFFF : COLOR_CARD_BORDER;
-            paint.setColor(blend(borderColor, 0x66FFFFFF, focus));
-            canvas.drawRoundRect(cardRect, radius, radius, paint);
-            paint.setStyle(Paint.Style.FILL);
-        }
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(dp(1));
+        int borderColor = glass ? 0x38FFFFFF : COLOR_CARD_BORDER;
+        paint.setColor(blend(borderColor, 0x66FFFFFF, focus));
+        canvas.drawRoundRect(cardRect, radius, radius, paint);
+        paint.setStyle(Paint.Style.FILL);
 
         float tile = Math.min(cardWidth * 0.245f, cardHeight * 0.34f);
         tile = Math.max(dp(36), Math.min(dp(66), tile));
         float iconCenterY = cardRect.top + cardHeight * 0.385f;
         rect.set(centerX - tile / 2f, iconCenterY - tile / 2f,
                 centerX + tile / 2f, iconCenterY + tile / 2f);
-        paint.setColor(glass ? 0x99101216 : 0xFF0B0C0F);
+        paint.setColor(glass && !focused ? 0x99101216 : 0xFF0B0C0F);
         canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(0.8f));
-        paint.setColor(glass ? 0x2EFFFFFF : 0x1FFFFFFF);
+        paint.setColor(glass && !focused ? 0x2EFFFFFF : 0x1FFFFFFF);
         canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
         paint.setStyle(Paint.Style.FILL);
 
@@ -2950,16 +2965,28 @@ final class LauncherView extends View {
     }
 
     private void drawKeycap(Canvas canvas, float x, float baseline, String label, float width) {
+        boolean glass = wallpaperBitmap != null;
         float top = baseline - dp(13);
+        if (glass) {
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(0x24FFFFFF);
+            canvas.drawRoundRect(x, top, x + width, top + dp(18), dp(5), dp(5), paint);
+        }
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
-        paint.setColor(0xFF3B3F46);
+        paint.setColor(glass ? 0x40FFFFFF : 0xFF3B3F46);
         canvas.drawRoundRect(x, top, x + width, top + dp(18), dp(5), dp(5), paint);
         paint.setStyle(Paint.Style.FILL);
+
         textPaint.setTypeface(typeMedium);
         textPaint.setTextAlign(Paint.Align.CENTER);
-        textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, label, x + width / 2f, baseline - dp(3.5f), sp(8), 0xFFC4BEB4);
+        textPaint.setLetterSpacing(0f);
+        textPaint.setTextSize(sp(8));
+        Paint.FontMetrics metrics = textPaint.getFontMetrics();
+        float centerY = top + dp(9);
+        float textY = centerY - (metrics.ascent + metrics.descent) / 2f;
+        drawText(canvas, label, x + width / 2f, textY, sp(8),
+                glass ? 0xFFF5F1E8 : 0xFFC4BEB4);
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
 
@@ -2968,7 +2995,7 @@ final class LauncherView extends View {
         textPaint.setColor(color);
         textPaint.setStyle(Paint.Style.FILL);
         if (wallpaperBitmap != null) {
-            textPaint.setShadowLayer(dp(2.5f), 0, dp(1), 0x8A000000);
+            textPaint.setShadowLayer(dp(3f), 0, dp(1), 0xB3000000);
         } else {
             textPaint.clearShadowLayer();
         }
@@ -3463,6 +3490,18 @@ final class LauncherView extends View {
     public boolean performClick() {
         super.performClick();
         return true;
+    }
+
+    private static ColorMatrixColorFilter createCardBackdropFilter() {
+        ColorMatrix saturation = new ColorMatrix();
+        saturation.setSaturation(1.2f);
+        saturation.postConcat(new ColorMatrix(new float[]{
+                0.72f, 0f, 0f, 0f, 0f,
+                0f, 0.72f, 0f, 0f, 0f,
+                0f, 0f, 0.72f, 0f, 0f,
+                0f, 0f, 0f, 1f, 0f
+        }));
+        return new ColorMatrixColorFilter(saturation);
     }
 
     private static int blend(int from, int to, float t) {
