@@ -51,7 +51,7 @@
 ## 直接安装
 
 ```bash
-adb install -r dist/HUSH-TV-1.9.2.apk
+adb install -r dist/HUSH-TV-1.9.3.apk
 
 # 如果之前装过 v1.2.0 的预编译 APK（旧签名），需要先卸载旧包：
 # adb uninstall com.hush.tv
@@ -234,7 +234,7 @@ adb shell wm density       # Physical density: 320
 Android/data/com.hush.tv/files/Download/HUSH/wallpapers
 ```
 
-有壁纸时，应用卡片会自动变为低灰度玻璃：保留壁纸颜色的饱和度，叠加平滑模糊、轻微压暗、斜向高光和淡亮边；同时去掉模块分割线和滚动条，减少线条干扰。整体遮罩也降到很低，只在标题/文字区域保留局部暗角，避免壁纸过暗。
+有壁纸时，应用卡片会自动变为低灰度玻璃：保留壁纸颜色的饱和度，叠加平滑模糊、轻微压暗、斜向高光和淡亮边；壁纸本身不再加任何整体压暗，只保留文字阴影。同时去掉模块分割线和滚动条，减少线条干扰。
 
 这是留白自己的桌面背景，不修改系统壁纸，也不需要壁纸权限。
 

@@ -1751,13 +1751,6 @@ final class LauncherView extends View {
         if (wallpaperBitmap != null) {
             drawWallpaperBitmap(canvas, wallpaperBitmap);
             paint.setShader(null);
-            paint.setColor(0x2607080A);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-            drawWallpaperReadabilityScrim(canvas);
-            paint.setShader(vignette);
-            paint.setAlpha(50);
-            canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
-            paint.setAlpha(255);
         } else {
             paint.setShader(backgroundShader);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
@@ -2724,11 +2717,11 @@ final class LauncherView extends View {
                 paint.setFilterBitmap(false);
             }
 
-            paint.setColor(0x12101A24);
+            paint.setColor(0x0C0B2038);
             canvas.drawRect(cardRect, paint);
             paint.setShader(new LinearGradient(cardRect.left, cardRect.top,
                     cardRect.left, cardRect.top + cardHeight * 0.55f,
-                    0x30FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+                    0x24FFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
             canvas.drawRect(cardRect, paint);
             paint.setShader(new LinearGradient(cardRect.left, cardRect.top + cardHeight * 0.38f,
                     cardRect.left, cardRect.bottom, 0x00000000, 0x99000000,
@@ -2736,11 +2729,11 @@ final class LauncherView extends View {
             canvas.drawRect(cardRect, paint);
             paint.setShader(new LinearGradient(cardRect.left, cardRect.top,
                     cardRect.right, cardRect.bottom,
-                    new int[]{0x38FFFFFF, 0x08FFFFFF, 0x00FFFFFF},
+                    new int[]{0x28FFFFFF, 0x06FFFFFF, 0x00FFFFFF},
                     new float[]{0f, 0.42f, 0.82f}, Shader.TileMode.CLAMP));
             canvas.drawRect(cardRect, paint);
             paint.setShader(null);
-            paint.setColor(0x0FFFFFFF);
+            paint.setColor(0x08FFFFFF);
             canvas.drawRect(cardRect, paint);
             canvas.restore();
 
@@ -2755,7 +2748,7 @@ final class LauncherView extends View {
 
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(1));
-        int borderColor = glass ? 0x38FFFFFF : COLOR_CARD_BORDER;
+        int borderColor = glass ? 0x30FFFFFF : COLOR_CARD_BORDER;
         paint.setColor(blend(borderColor, 0x66FFFFFF, focus));
         canvas.drawRoundRect(cardRect, radius, radius, paint);
         paint.setStyle(Paint.Style.FILL);
@@ -3494,11 +3487,11 @@ final class LauncherView extends View {
 
     private static ColorMatrixColorFilter createCardBackdropFilter() {
         ColorMatrix saturation = new ColorMatrix();
-        saturation.setSaturation(1.2f);
+        saturation.setSaturation(1.35f);
         saturation.postConcat(new ColorMatrix(new float[]{
-                0.72f, 0f, 0f, 0f, 0f,
-                0f, 0.72f, 0f, 0f, 0f,
-                0f, 0f, 0.72f, 0f, 0f,
+                0.80f, 0f, 0f, 0f, 0f,
+                0f, 0.80f, 0f, 0f, 0f,
+                0f, 0f, 0.80f, 0f, 0f,
                 0f, 0f, 0f, 1f, 0f
         }));
         return new ColorMatrixColorFilter(saturation);
