@@ -16,6 +16,7 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.LinearGradient;
 import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.RadialGradient;
 import android.graphics.Rect;
 import android.graphics.RectF;
@@ -180,6 +181,7 @@ final class LauncherView extends View {
     private boolean centerClock;
     private String wallpaperPath = "";
     private Bitmap wallpaperBitmap;
+    private Bitmap wallpaperBlurred;
     private boolean wallpaperOpen;
     private float wallpaperProgress;
     private ValueAnimator wallpaperAnimator;
@@ -1620,6 +1622,9 @@ final class LauncherView extends View {
         computeLayout();
         buildBackground(w, h);
         loadWallpaperIfNeeded();
+        if (wallpaperBitmap != null) {
+            buildBlurredWallpaper();
+        }
     }
 
     private void computeLayout() {
@@ -1743,10 +1748,13 @@ final class LauncherView extends View {
         if (wallpaperBitmap != null) {
             drawWallpaperBitmap(canvas, wallpaperBitmap);
             paint.setShader(null);
-            paint.setColor(0xA607080A);
+            paint.setColor(0x4D07080A);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            drawWallpaperReadabilityScrim(canvas);
             paint.setShader(vignette);
+            paint.setAlpha(90);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+            paint.setAlpha(255);
         } else {
             paint.setShader(backgroundShader);
             canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
@@ -1770,7 +1778,6 @@ final class LauncherView extends View {
             drawApps(canvas);
         } else {
             drawHero(canvas);
-            drawDivider(canvas);
             drawApps(canvas);
             drawFooter(canvas);
         }
@@ -1796,6 +1803,7 @@ final class LauncherView extends View {
         Bitmap bitmap = decodeImage(file, getWidth(), getHeight());
         if (bitmap != null) {
             wallpaperBitmap = bitmap;
+            buildBlurredWallpaper();
             invalidate();
         }
     }
@@ -1812,6 +1820,7 @@ final class LauncherView extends View {
         wallpaperBitmap = bitmap;
         wallpaperPath = file.getAbsolutePath();
         layoutPrefs.edit().putString(LAYOUT_WALLPAPER, wallpaperPath).apply();
+        buildBlurredWallpaper();
         invalidate();
         return true;
     }
@@ -1820,6 +1829,10 @@ final class LauncherView extends View {
         if (wallpaperBitmap != null) {
             wallpaperBitmap.recycle();
             wallpaperBitmap = null;
+        }
+        if (wallpaperBlurred != null) {
+            wallpaperBlurred.recycle();
+            wallpaperBlurred = null;
         }
         wallpaperPath = "";
         layoutPrefs.edit().remove(LAYOUT_WALLPAPER).apply();
@@ -1856,6 +1869,30 @@ final class LauncherView extends View {
         }
         RectF dst = new RectF(0, 0, getWidth(), getHeight());
         drawBitmapCrop(canvas, bitmap, dst);
+    }
+
+    private void buildBlurredWallpaper() {
+        int w = getWidth();
+        int h = getHeight();
+        if (wallpaperBitmap == null || w <= 0 || h <= 0) {
+            if (wallpaperBlurred != null) {
+                wallpaperBlurred.recycle();
+                wallpaperBlurred = null;
+            }
+            return;
+        }
+        int smallWidth = Math.max(1, w / 14);
+        int smallHeight = Math.max(1, h / 14);
+        Bitmap small = Bitmap.createBitmap(smallWidth, smallHeight, Bitmap.Config.ARGB_8888);
+        Canvas smallCanvas = new Canvas(small);
+        drawBitmapCrop(smallCanvas, wallpaperBitmap,
+                new RectF(0, 0, smallWidth, smallHeight));
+        Bitmap blurred = Bitmap.createScaledBitmap(small, w, h, true);
+        small.recycle();
+        if (wallpaperBlurred != null) {
+            wallpaperBlurred.recycle();
+        }
+        wallpaperBlurred = blurred;
     }
 
     private void drawBitmapCrop(Canvas canvas, Bitmap bitmap, RectF dst) {
@@ -2266,6 +2303,39 @@ final class LauncherView extends View {
         canvas.restore();
     }
 
+    private void drawWallpaperReadabilityScrim(Canvas canvas) {
+        float w = getWidth();
+        float h = getHeight();
+        if (!pureMode) {
+            Shader shader;
+            if (sideClock()) {
+                if (rightClock()) {
+                    shader = new LinearGradient(w, 0, w * 0.45f, 0, 0x5C07080A, 0x0007080A,
+                            Shader.TileMode.CLAMP);
+                } else {
+                    shader = new LinearGradient(0, 0, w * 0.55f, 0, 0x5C07080A, 0x0007080A,
+                            Shader.TileMode.CLAMP);
+                }
+            } else if ("top".equals(clockPosition)) {
+                shader = new LinearGradient(0, 0, 0, h * 0.42f, 0x5C07080A, 0x0007080A,
+                        Shader.TileMode.CLAMP);
+            } else {
+                shader = new LinearGradient(0, h, 0, h * 0.58f, 0x5C07080A, 0x0007080A,
+                        Shader.TileMode.CLAMP);
+            }
+            paint.setShader(shader);
+            canvas.drawRect(0, 0, w, h, paint);
+        }
+
+        paint.setShader(new LinearGradient(0, 0, 0, dp(86), 0x4D07080A, 0x0007080A,
+                Shader.TileMode.CLAMP));
+        canvas.drawRect(0, 0, w, dp(86), paint);
+        paint.setShader(new LinearGradient(0, h, 0, h - dp(84), 0x6607080A, 0x0007080A,
+                Shader.TileMode.CLAMP));
+        canvas.drawRect(0, h - dp(84), w, h, paint);
+        paint.setShader(null);
+    }
+
     private void drawHeader(Canvas canvas) {
         // A tiny version of the app mark: a cream ring and one amber dot.
         float size = dp(21);
@@ -2288,7 +2358,8 @@ final class LauncherView extends View {
         float brandWidth = textPaint.measureText("HUSH");
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, "留白", padH + dp(32) + brandWidth + dp(8), padTop + dp(15), sp(9), 0xFF747A83);
+        drawText(canvas, "留白", padH + dp(32) + brandWidth + dp(8), padTop + dp(15), sp(9),
+                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF747A83);
 
         textPaint.setTextAlign(Paint.Align.LEFT);
 
@@ -2351,7 +2422,7 @@ final class LauncherView extends View {
             float labelWidth = textWidth("现在", typeRegular, sp(9), 0.24f);
             canvas.drawCircle(x - labelWidth / 2f - dp(7), gridTop + dp(51) + shift, dp(2), textPaint);
             drawText(canvas, "现在", x + dp(4), gridTop + dp(55) + shift, sp(9),
-                    0xFF7A8089);
+                    wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
         } else {
             canvas.drawCircle(x + direction * dp(2), gridTop + dp(51), dp(2), textPaint);
             drawText(canvas, "现在", x + direction * dp(11), gridTop + dp(55), sp(9),
@@ -2400,7 +2471,8 @@ final class LauncherView extends View {
             textPaint.setTextAlign(align);
             textPaint.setLetterSpacing(0.12f);
             drawText(canvas, "少一点，刚刚好。", centered ? x : x + direction * dp(2),
-                    dp(390) + shift, sp(10), 0xFF686E77);
+                    dp(390) + shift, sp(10),
+                    wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
         }
         textPaint.setTextAlign(Paint.Align.LEFT);
     }
@@ -2430,7 +2502,8 @@ final class LauncherView extends View {
             if (showTagline) {
                 textPaint.setLetterSpacing(0.12f);
                 drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
-                        getHeight() * 0.35f, sp(9), 0xFF686E77);
+                        getHeight() * 0.35f, sp(9),
+                        wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
             }
             textPaint.setTextAlign(Paint.Align.LEFT);
             return;
@@ -2481,7 +2554,8 @@ final class LauncherView extends View {
             if (showTagline) {
                 textPaint.setLetterSpacing(0.12f);
                 drawText(canvas, "少一点，刚刚好。", getWidth() / 2f,
-                        getHeight() * 0.96f, sp(9), 0xFF686E77);
+                        getHeight() * 0.96f, sp(9),
+                        wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF686E77);
             }
             textPaint.setTextAlign(Paint.Align.LEFT);
             return;
@@ -2494,7 +2568,7 @@ final class LauncherView extends View {
         textPaint.setColor(COLOR_ACCENT);
         canvas.drawCircle(padH + dp(2), getHeight() * 0.70f, dp(2), textPaint);
         drawText(canvas, "现在", padH + dp(11), getHeight() * 0.704f, sp(9),
-                0xFF7A8089);
+                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
         textPaint.setTypeface(typeLight);
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setLetterSpacing(-0.035f);
@@ -2536,18 +2610,16 @@ final class LauncherView extends View {
             textPaint.setLetterSpacing(0.28f);
             float titleWidth = textPaint.measureText("应用");
             float appsX = gridLeft + titleWidth + dp(8);
-            drawText(canvas, "APPS", appsX, gridTop - dp(21), sp(8), 0xFF5B616A);
+            int muted = wallpaperBitmap != null ? 0xFFD8D3CA : 0xFF5B616A;
+            drawText(canvas, "APPS", appsX, gridTop - dp(21), sp(8), muted);
             float appsWidth = textPaint.measureText("APPS");
 
             String count = loading && apps.isEmpty() ? "··" :
                     String.format(Locale.CHINA, "%02d", apps.size());
             textPaint.setLetterSpacing(0.08f);
-            drawText(canvas, count, appsX + appsWidth + dp(10), gridTop - dp(21), sp(8), 0xFF5B616A);
+            drawText(canvas, count, appsX + appsWidth + dp(10), gridTop - dp(21), sp(8), muted);
             textPaint.setTextAlign(Paint.Align.LEFT);
 
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(COLOR_HAIRLINE);
-            canvas.drawRect(gridLeft, gridTop - dp(9), gridRight, gridTop - dp(8.2f), paint);
         }
 
         if (loading && apps.isEmpty()) {
@@ -2603,6 +2675,7 @@ final class LauncherView extends View {
         cardRect.set(centerX - cardWidth / 2f, drawTop,
                 centerX + cardWidth / 2f, drawTop + cardHeight);
         float radius = dp(18);
+        boolean glass = wallpaperBitmap != null;
 
         if (focus > 0.01f) {
             paint.setStyle(Paint.Style.FILL);
@@ -2617,25 +2690,71 @@ final class LauncherView extends View {
         }
 
         paint.setStyle(Paint.Style.FILL);
-        paint.setColor(blend(COLOR_CARD, COLOR_CARD_FOCUS, focus));
-        canvas.drawRoundRect(cardRect, radius, radius, paint);
+        if (glass && wallpaperBlurred != null && !wallpaperBlurred.isRecycled()) {
+            canvas.save();
+            Path clip = new Path();
+            clip.addRoundRect(cardRect, radius, radius, Path.Direction.CW);
+            canvas.clipPath(clip);
 
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(dp(1));
-        paint.setColor(blend(COLOR_CARD_BORDER, 0x66FFFFFF, focus));
-        canvas.drawRoundRect(cardRect, radius, radius, paint);
-        paint.setStyle(Paint.Style.FILL);
+            Rect src = new Rect((int) Math.floor(cardRect.left),
+                    (int) Math.floor(cardRect.top),
+                    (int) Math.ceil(cardRect.right),
+                    (int) Math.ceil(cardRect.bottom));
+            Rect safe = new Rect(src);
+            if (safe.intersect(0, 0, getWidth(), getHeight())) {
+                RectF dst = new RectF(
+                        cardRect.left + (safe.left - src.left),
+                        cardRect.top + (safe.top - src.top),
+                        cardRect.left + (safe.right - src.left),
+                        cardRect.top + (safe.bottom - src.top));
+                paint.setShader(null);
+                paint.setAlpha(255);
+                paint.setFilterBitmap(true);
+                canvas.drawBitmap(wallpaperBlurred, safe, dst, paint);
+                paint.setFilterBitmap(false);
+            }
+
+            paint.setColor(0x30101216);
+            canvas.drawRect(cardRect, paint);
+            paint.setShader(new LinearGradient(cardRect.left, cardRect.top,
+                    cardRect.left, cardRect.top + cardHeight * 0.55f,
+                    0x1CFFFFFF, 0x00FFFFFF, Shader.TileMode.CLAMP));
+            canvas.drawRect(cardRect, paint);
+            paint.setShader(new LinearGradient(cardRect.left, cardRect.top + cardHeight * 0.38f,
+                    cardRect.left, cardRect.bottom, 0x00000000, 0x73000000,
+                    Shader.TileMode.CLAMP));
+            canvas.drawRect(cardRect, paint);
+            paint.setShader(null);
+            canvas.restore();
+
+            if (focus > 0.01f) {
+                paint.setColor(withAlpha(COLOR_CARD_FOCUS, (int) (255 * focus)));
+                canvas.drawRoundRect(cardRect, radius, radius, paint);
+            }
+        } else {
+            paint.setColor(blend(COLOR_CARD, COLOR_CARD_FOCUS, focus));
+            canvas.drawRoundRect(cardRect, radius, radius, paint);
+        }
+
+        if (!glass || focus > 0.01f) {
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(dp(1));
+            int borderColor = glass ? 0x1AFFFFFF : COLOR_CARD_BORDER;
+            paint.setColor(blend(borderColor, 0x66FFFFFF, focus));
+            canvas.drawRoundRect(cardRect, radius, radius, paint);
+            paint.setStyle(Paint.Style.FILL);
+        }
 
         float tile = Math.min(cardWidth * 0.245f, cardHeight * 0.34f);
         tile = Math.max(dp(36), Math.min(dp(66), tile));
         float iconCenterY = cardRect.top + cardHeight * 0.385f;
         rect.set(centerX - tile / 2f, iconCenterY - tile / 2f,
                 centerX + tile / 2f, iconCenterY + tile / 2f);
-        paint.setColor(0xFF0B0C0F);
+        paint.setColor(glass ? 0x99101216 : 0xFF0B0C0F);
         canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(dp(0.8f));
-        paint.setColor(0x1FFFFFFF);
+        paint.setColor(glass ? 0x2EFFFFFF : 0x1FFFFFFF);
         canvas.drawRoundRect(rect, tile * 0.28f, tile * 0.28f, paint);
         paint.setStyle(Paint.Style.FILL);
 
@@ -2663,8 +2782,9 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeMedium);
         textPaint.setTextAlign(Paint.Align.CENTER);
         textPaint.setLetterSpacing(0.02f);
+        int labelColor = glass ? 0xFFF5F1E8 : COLOR_LABEL;
         drawText(canvas, label.toString(), centerX, cardRect.top + cardHeight * 0.845f,
-                labelSize, blend(COLOR_LABEL, COLOR_INK, focus));
+                labelSize, blend(labelColor, COLOR_INK, focus));
         textPaint.setTextAlign(Paint.Align.LEFT);
 
         if (isPinned(entry)) {
@@ -2681,7 +2801,7 @@ final class LauncherView extends View {
     }
 
     private void drawScrollBar(Canvas canvas) {
-        if (maxScroll <= 0f || rows <= visibleRows) {
+        if (maxScroll <= 0f || rows <= visibleRows || wallpaperBitmap != null) {
             return;
         }
         float trackTop = gridTop;
@@ -2707,19 +2827,24 @@ final class LauncherView extends View {
         textPaint.setTypeface(typeRegular);
         textPaint.setTextAlign(Paint.Align.LEFT);
         textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, "打开", x + dp(37), baseline - dp(1), sp(10), 0xFF7A8089);
+        drawText(canvas, "打开", x + dp(37), baseline - dp(1), sp(10),
+                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
 
         float groupX = x + dp(93);
         textPaint.setTypeface(typeRegular);
         textPaint.setLetterSpacing(0.08f);
-        drawText(canvas, "← ↑ ↓ →", groupX, baseline - dp(1), sp(9), 0xFF9BA0A7);
-        drawText(canvas, "选择", groupX + dp(54), baseline - dp(1), sp(10), 0xFF7A8089);
-        drawText(canvas, "MENU 操作", x + dp(190), baseline - dp(1), sp(9), 0xFF7A8089);
+        drawText(canvas, "← ↑ ↓ →", groupX, baseline - dp(1), sp(9),
+                wallpaperBitmap != null ? 0xFFE2DED6 : 0xFF9BA0A7);
+        drawText(canvas, "选择", groupX + dp(54), baseline - dp(1), sp(10),
+                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
+        drawText(canvas, "MENU 操作", x + dp(190), baseline - dp(1), sp(9),
+                wallpaperBitmap != null ? 0xFFD0CBC2 : 0xFF7A8089);
 
         textPaint.setTextAlign(Paint.Align.RIGHT);
         textPaint.setLetterSpacing(0.16f);
         if (defaultHome) {
-            drawText(canvas, "HUSH  /  留白", getWidth() - padH, baseline - dp(1), sp(8), 0xFF4E545C);
+            drawText(canvas, "HUSH  /  留白", getWidth() - padH, baseline - dp(1), sp(8),
+                    wallpaperBitmap != null ? 0xFFC9C5BC : 0xFF4E545C);
         } else {
             drawText(canvas, "长按 MENU 桌面设置", getWidth() - padH, baseline - dp(1), sp(8), COLOR_ACCENT);
         }
@@ -2842,6 +2967,11 @@ final class LauncherView extends View {
         textPaint.setTextSize(size);
         textPaint.setColor(color);
         textPaint.setStyle(Paint.Style.FILL);
+        if (wallpaperBitmap != null) {
+            textPaint.setShadowLayer(dp(2.5f), 0, dp(1), 0x8A000000);
+        } else {
+            textPaint.clearShadowLayer();
+        }
         canvas.drawText(text, x, y, textPaint);
     }
 

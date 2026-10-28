@@ -2,7 +2,7 @@
 
 > 少一点，刚刚好。
 
-一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **116 KB**。
+一个为电视遥控器设计的极简 Android TV 桌面。整个界面由一个自定义 `Canvas` 绘制，没有 AndroidX、Compose 或其它第三方运行时依赖，Release APK 约 **120 KB**。
 
 ![HUSH TV 桌面](screenshots/home.png)
 
@@ -51,7 +51,7 @@
 ## 直接安装
 
 ```bash
-adb install -r dist/HUSH-TV-1.9.0.apk
+adb install -r dist/HUSH-TV-1.9.1.apk
 
 # 如果之前装过 v1.2.0 的预编译 APK（旧签名），需要先卸载旧包：
 # adb uninstall com.hush.tv
@@ -233,6 +233,8 @@ adb shell wm density       # Physical density: 320
 ```text
 Android/data/com.hush.tv/files/Download/HUSH/wallpapers
 ```
+
+有壁纸时，应用卡片会自动变为轻透磨砂玻璃，并去掉卡片描边、模块分割线和滚动条，减少线条干扰；留白也会降低整体遮罩，只在标题/文字区域保留局部暗角，避免壁纸过暗。
 
 这是留白自己的桌面背景，不修改系统壁纸，也不需要壁纸权限。
 

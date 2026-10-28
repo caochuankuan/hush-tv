@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ADB="${ADB:-adb}"
-APK="${APK:-$ROOT/dist/HUSH-TV-1.9.0.apk}"
+APK="${APK:-$ROOT/dist/HUSH-TV-1.9.1.apk}"
 
 "$ADB" install -r "$APK"
 "$ADB" shell cmd role add-role-holder android.app.role.HOME com.hush.tv >/dev/null 2>&1 || true
